@@ -1,7 +1,9 @@
+
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { AppSettings, WordEntry, LookupResult, HistoryEntry } from '../types';
 import { SiliconFlowService } from '../services/siliconFlow';
 import { AzureTTSService, AZURE_VOICES } from '../services/azureTTS';
+import { GoogleFreeTTS } from '../services/googleTTS';
 import { WordDetailModal } from '../components/WordDetailModal';
 import { useLocalStorage } from '../hooks/useLocalStorage';
 
@@ -37,9 +39,21 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
   const [lookupData, setLookupData] = useState<LookupResult | null>(null);
   const [isLookingUp, setIsLookingUp] = useState(false);
   
+  // Playback Mode State
+  const [playMode, setPlayMode] = useState<'all' | 'select' | 'continue'>('all');
+  const [selRange, setSelRange] = useState({ start: 0, end: 0 });
+
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const googleTTS = useRef(new GoogleFreeTTS());
+
+  // LRU Audio Cache
+  // Maps a unique key (provider-voice-speed-text) to the Blob URL
+  const audioCache = useRef<Map<string, string>>(new Map());
+
+  // Request Lock to prevent concurrent Azure requests (which cause 429s on single-thread keys)
+  const isFetchingAudio = useRef(false);
 
   // BUG FIX: Refs to track scrolling and selection to prevent ghost lookups on iPhone
   const isScrolling = useRef(false);
@@ -50,6 +64,10 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
   useEffect(() => {
     return () => {
       stopAudio();
+      isFetchingAudio.current = false; // Reset lock on unmount
+      // Cleanup cache on unmount
+      audioCache.current.forEach(url => URL.revokeObjectURL(url));
+      audioCache.current.clear();
     };
   }, []);
 
@@ -63,7 +81,9 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
 
     // Priority 2: Check for Chinese characters anywhere in the text.
     // Only match if Kana check failed, implying it's likely Chinese.
-    if (/[\u4e00-\u9fa5]/.test(text)) return 'zh';
+    // However, we need to be careful not to misclassify Kanji-only sentences as Chinese if context suggests Japanese.
+    // But for general detection, this order is usually correct for mixed texts.
+    if (/[^\u3040-\u30ff\u3400-\u4dbf\u31f0-\u31ff\uff66-\uff9f][\u4e00-\u9fa5]/.test(text) || /^[\u4e00-\u9fa5]+$/.test(text)) return 'zh';
 
     // Priority 3: Check for Cyrillic (Russian)
     if (/[а-яА-ЯЁё]/.test(text)) return 'ru';
@@ -91,6 +111,25 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
     return COSY_VOICES;
   }, [settings.ttsProvider, detectedLang]);
 
+  // Update Play Mode based on cursor position
+  const updatePlayMode = () => {
+    const el = textareaRef.current;
+    if (!el) return;
+    
+    const start = el.selectionStart;
+    const end = el.selectionEnd;
+    
+    setSelRange({ start, end });
+    
+    if (start !== end) {
+        setPlayMode('select');
+    } else if (start > 0 && start < el.value.length) {
+        setPlayMode('continue');
+    } else {
+        setPlayMode('all');
+    }
+  };
+
   // Touch Move handler to detect scrolling
   const handleTouchMove = () => {
       isScrolling.current = true;
@@ -100,6 +139,9 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
     const textarea = textareaRef.current;
     if (!textarea) return;
     
+    // Update play mode on click/selection end
+    updatePlayMode();
+
     // If user was scrolling, ignore this event (it's likely a touchEnd from a scroll)
     if (isScrolling.current) {
         // Reset scrolling flag after a short delay
@@ -252,25 +294,107 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
     }
   };
 
-  const playAudio = async () => {
-    if (!text) return;
-    setIsPlaying(true);
+  // Helper to save audio to LRU cache
+  const saveAudioToCache = (key: string, url: string) => {
+      const cache = audioCache.current;
+      // If key exists, delete it to re-insert at end (update recency)
+      if (cache.has(key)) {
+          cache.delete(key);
+      }
+      
+      // If capacity exceeded, remove oldest
+      if (cache.size >= 10) {
+          const oldestKey = cache.keys().next().value;
+          if (oldestKey) {
+              const urlToRemove = cache.get(oldestKey);
+              cache.delete(oldestKey);
+              if (urlToRemove) URL.revokeObjectURL(urlToRemove);
+          }
+      }
+      
+      cache.set(key, url);
+  };
 
-    // Clear previous download URL if any to avoid confusion
-    if (audioUrl) {
-        URL.revokeObjectURL(audioUrl);
-        setAudioUrl(null);
+  const playAudio = async () => {
+    // 1. Singleton Lock: Prevent double clicking causing concurrent requests
+    if (isFetchingAudio.current) {
+        return; // Silently ignore multiple clicks
     }
 
+    if (!text) return;
+    
+    // Determine what text to play based on Play Mode
+    const el = textareaRef.current;
+    let textToPlay = text;
+
+    if (el) {
+        const start = el.selectionStart;
+        const end = el.selectionEnd;
+        
+        if (start !== end) {
+             // Play Selection
+             textToPlay = text.substring(start, end);
+        } else if (start > 0) {
+             // Play from cursor to end
+             textToPlay = text.substring(start);
+        }
+    }
+
+    if (!textToPlay.trim()) {
+        alert("无可播放内容");
+        return;
+    }
+
+    // 2. Clear Previous Audio State
+    stopAudio(); // Ensure any existing audio is fully stopped before starting new
+    setIsPlaying(true);
+
+    const currentVoice = settings.ttsProvider === 'siliconflow' ? settings.sfTtsVoice : settings.azureVoice;
+    
+    // Cache Key Logic
+    const shouldCache = settings.ttsProvider === 'siliconflow' || settings.ttsProvider === 'azure';
+    const cacheKey = shouldCache ? JSON.stringify({
+        provider: settings.ttsProvider,
+        voice: currentVoice,
+        speed: settings.ttsSpeed,
+        text: textToPlay
+    }) : '';
+
+    // 3. Check Cache (Synchronous)
+    if (shouldCache && audioCache.current.has(cacheKey)) {
+        console.log("Audio Cache Hit! Playing from memory.");
+        const cachedUrl = audioCache.current.get(cacheKey)!;
+        
+        // Refresh LRU position
+        audioCache.current.delete(cacheKey);
+        audioCache.current.set(cacheKey, cachedUrl);
+
+        setAudioUrl(cachedUrl);
+        
+        audioRef.current = new Audio(cachedUrl);
+        audioRef.current.onended = () => setIsPlaying(false);
+        audioRef.current.play();
+        return;
+    }
+
+    // 4. Fetch from API
     try {
+        isFetchingAudio.current = true; // Lock
         let audioBuffer: ArrayBuffer | null = null;
 
-        if (settings.ttsProvider === 'siliconflow') {
+        if (settings.ttsProvider === 'google') {
+            // Google Free TTS (Stream only)
+            // Force 1.0 speed to prevent playback issues on iOS/Safari with streaming audio
+            await googleTTS.current.play(textToPlay, detectedLang, 1.0, () => {
+                setIsPlaying(false);
+            });
+            // Google TTS doesn't return a buffer to cache or download
+        } else if (settings.ttsProvider === 'siliconflow') {
             if (!settings.apiKey) throw new Error("请配置 SiliconFlow API Key");
             if (!settings.sfTtsVoice) throw new Error("请选择语音音色");
             
             audioBuffer = await sfService.generateSpeech(
-                text.substring(0, 4000), 
+                textToPlay.substring(0, 4000), 
                 settings.sfTtsModel,
                 settings.sfTtsVoice,
                 settings.ttsSpeed
@@ -283,7 +407,7 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
 
             const azureService = new AzureTTSService(settings.azureKey, settings.azureRegion);
             audioBuffer = await azureService.generateSpeech(
-                text.substring(0, 4000),
+                textToPlay.substring(0, 4000),
                 voice,
                 settings.ttsSpeed
             );
@@ -291,16 +415,28 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
         } else {
             // Browser TTS
             if ('speechSynthesis' in window) {
-                const utterance = new SpeechSynthesisUtterance(text);
+                const utterance = new SpeechSynthesisUtterance(textToPlay);
                 utterance.rate = settings.ttsSpeed;
+                
+                // Smart Language Matching for iOS/Browser
+                let langCode = 'en-US';
+                if (detectedLang === 'zh') langCode = 'zh-CN';
+                if (detectedLang === 'ru') langCode = 'ru-RU';
+                if (detectedLang === 'ja') langCode = 'ja-JP';
+                utterance.lang = langCode;
+
                 const voices = window.speechSynthesis.getVoices();
-                const preferredVoice = voices.find(v => v.lang.startsWith('en') && (v.name.includes('Google') || v.name.includes('Microsoft'))) || voices[0];
-                if (preferredVoice) utterance.voice = preferredVoice;
+                // Try to find a voice that matches the specific language
+                const preferredVoice = voices.find(v => v.lang === langCode) || 
+                                       voices.find(v => v.lang.startsWith(langCode.split('-')[0]));
+                
+                if (preferredVoice) {
+                    utterance.voice = preferredVoice;
+                }
 
                 utterance.onend = () => setIsPlaying(false);
                 window.speechSynthesis.cancel();
                 window.speechSynthesis.speak(utterance);
-                return; 
             } else {
                 throw new Error("浏览器不支持本地 TTS");
             }
@@ -309,11 +445,14 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
         if (audioBuffer) {
             const blob = new Blob([audioBuffer], { type: 'audio/mp3' });
             const url = URL.createObjectURL(blob);
+            
+            // Save to Cache
+            if (shouldCache) {
+                saveAudioToCache(cacheKey, url);
+            }
+
             setAudioUrl(url); // Save URL for download
             
-            if (audioRef.current) {
-                audioRef.current.pause();
-            }
             audioRef.current = new Audio(url);
             audioRef.current.onended = () => setIsPlaying(false);
             audioRef.current.play();
@@ -321,16 +460,24 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
 
     } catch (err: any) {
         console.error(err);
-        alert(`语音播放失败: ${err.message}`);
+        if (err.message === 'Azure_429' || err.message.includes('429')) {
+             alert("请求过于频繁 (Azure 限制)，请稍后再试。");
+        } else {
+             alert(`语音播放失败: ${err.message}`);
+        }
         setIsPlaying(false);
+    } finally {
+        isFetchingAudio.current = false; // Unlock
     }
   };
 
   const stopAudio = () => {
     if (audioRef.current) {
         audioRef.current.pause();
+        audioRef.current.currentTime = 0;
     }
     window.speechSynthesis.cancel();
+    googleTTS.current.stop();
     setIsPlaying(false);
   };
 
@@ -343,6 +490,13 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
   };
 
   const currentVoice = settings.ttsProvider === 'siliconflow' ? settings.sfTtsVoice : settings.azureVoice;
+
+  const getPlayButtonLabel = () => {
+      const speed = settings.ttsProvider === 'google' ? '1.0' : settings.ttsSpeed;
+      if (playMode === 'select') return `播放选中 (${selRange.end - selRange.start}字)`;
+      if (playMode === 'continue') return `从光标处播放 (${speed}x)`;
+      return `开始跟读 (${speed}x)`;
+  };
 
   return (
     <div className="flex flex-col min-h-[calc(100vh-4rem)] p-4 md:p-6 gap-6 pb-40">
@@ -392,7 +546,7 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
             </button>
         </div>
 
-        <div className="flex items-center gap-2 w-full md:w-auto">
+        <div className="flex items-center gap-2 w-full md:w-auto relative">
             {isPlaying ? (
                 <button 
                     onClick={stopAudio}
@@ -405,11 +559,27 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
                 <button 
                     onClick={playAudio}
                     disabled={!text}
-                    className="w-full md:w-auto flex items-center justify-center gap-2 px-6 py-2.5 bg-black dark:bg-white hover:bg-gray-800 dark:hover:bg-gray-200 text-white dark:text-black rounded-full shadow-lg shadow-gray-200 dark:shadow-none text-sm font-medium transition-all transform active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                    className={`w-full md:w-auto flex items-center justify-center gap-2 px-6 py-2.5 rounded-full shadow-lg text-sm font-medium transition-all transform active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed ${
+                        playMode === 'select' 
+                        ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-blue-200 dark:shadow-none'
+                        : 'bg-black dark:bg-white hover:bg-gray-800 dark:hover:bg-gray-200 text-white dark:text-black shadow-gray-200 dark:shadow-none'
+                    }`}
                 >
-                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
-                    开始跟读 ({settings.ttsSpeed}x)
+                    {playMode === 'select' ? (
+                         <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/></svg>
+                    ) : (
+                         <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                    )}
+                    {getPlayButtonLabel()}
                 </button>
+            )}
+            
+            {/* Loop Hint for Select Mode */}
+            {playMode === 'select' && !isPlaying && (
+                <div className="absolute -top-10 left-1/2 -translate-x-1/2 bg-gray-900/90 dark:bg-white/90 text-white dark:text-gray-900 text-[10px] font-semibold px-3 py-1.5 rounded-full whitespace-nowrap animate-bounce shadow-xl border border-white/10 dark:border-black/5 z-50">
+                   ✨ 保持选中可循环练习
+                   <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-gray-900/90 dark:bg-white/90 rotate-45"></div>
+                </div>
             )}
         </div>
       </div>
@@ -432,6 +602,9 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
                 onTouchMove={handleTouchMove} // Track scrolling
                 onMouseUp={handleSelection}   // Handle selection end
                 onTouchEnd={handleSelection}  // Handle touch end (iOS)
+                onSelect={updatePlayMode}     // Update play mode on selection
+                onKeyUp={updatePlayMode}      // Update on cursor movement
+                onClick={updatePlayMode}      // Update on click
                 placeholder="在此粘贴文章，或点击上方按钮识别图片..."
                 className="flex-1 w-full p-6 outline-none resize-none bg-transparent leading-relaxed text-lg text-gray-800 dark:text-gray-100 placeholder-gray-300 dark:placeholder-gray-600 font-normal"
             />
@@ -478,10 +651,12 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
             <div className="w-full md:w-1/3 flex items-end gap-3">
                 <div className="flex-1">
                     <label className="block text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">
-                        当前音色 ({settings.ttsProvider === 'azure' ? 'Azure' : settings.ttsProvider === 'siliconflow' ? 'CosyVoice' : '本地'})
+                        当前音色 ({settings.ttsProvider === 'azure' ? 'Azure' : settings.ttsProvider === 'siliconflow' ? 'CosyVoice' : settings.ttsProvider === 'google' ? 'Google' : '本地'})
                     </label>
                     {settings.ttsProvider === 'browser' ? (
                          <div className="text-sm text-gray-500 dark:text-gray-400">使用浏览器默认音色</div>
+                    ) : settings.ttsProvider === 'google' ? (
+                         <div className="text-sm text-gray-500 dark:text-gray-400">Google 默认音色 (免费)</div>
                     ) : (
                         <select 
                             value={currentVoice}
@@ -498,7 +673,7 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
                     )}
                 </div>
 
-                {audioUrl && (
+                {audioUrl && settings.ttsProvider !== 'google' && (
                     <a 
                         href={audioUrl} 
                         download={`polyglot-audio-${Date.now()}.mp3`}
@@ -514,18 +689,25 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
             <div className="w-full md:w-1/2 flex flex-col gap-2">
                  <div className="flex justify-between text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider">
                     <span>慢速</span>
-                    <span>语速: {settings.ttsSpeed}x</span>
+                    <span>语速: {settings.ttsProvider === 'google' ? '1.0' : settings.ttsSpeed}x</span>
                     <span>快速</span>
                  </div>
-                 <input 
-                    type="range" 
-                    min="0.5" 
-                    max="1.5" 
-                    step="0.05" 
-                    value={settings.ttsSpeed}
-                    onChange={(e) => onSettingsChange({ ...settings, ttsSpeed: parseFloat(e.target.value) })}
-                    className="w-full accent-black dark:accent-white h-2 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer" 
-                 />
+                 
+                 {settings.ttsProvider === 'google' ? (
+                    <div className="w-full h-8 flex items-center justify-center bg-gray-50 dark:bg-gray-800 rounded-lg text-xs text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-white/5">
+                        Google 免费接口不支持语速调节
+                    </div>
+                 ) : (
+                     <input 
+                        type="range" 
+                        min="0.5" 
+                        max="1.5" 
+                        step="0.05" 
+                        value={settings.ttsSpeed}
+                        onChange={(e) => onSettingsChange({ ...settings, ttsSpeed: parseFloat(e.target.value) })}
+                        className="w-full accent-black dark:accent-white h-2 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer" 
+                     />
+                 )}
             </div>
         </div>
       </div>

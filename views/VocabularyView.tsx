@@ -1,5 +1,5 @@
 
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { WordEntry, HistoryEntry } from '../types';
 
 interface Props {
@@ -8,11 +8,36 @@ interface Props {
   onRemove: (ids: string[]) => void;
 }
 
+type LangCategory = 'Japanese' | 'Russian' | 'Chinese' | 'English/Other';
+
 export const VocabularyView: React.FC<Props> = ({ vocab, history, onRemove }) => {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showGuide, setShowGuide] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(null);
+
+  // Group vocabulary by language
+  const groupedVocab = useMemo(() => {
+    const groups: Record<LangCategory, WordEntry[]> = {
+        'Japanese': [],
+        'Russian': [],
+        'Chinese': [],
+        'English/Other': []
+    };
+
+    vocab.forEach(word => {
+        if (/[\u3040-\u30ff\u3400-\u4dbf]/.test(word.word)) {
+            groups['Japanese'].push(word);
+        } else if (/[а-яА-ЯЁё]/.test(word.word)) {
+            groups['Russian'].push(word);
+        } else if (/[\u4e00-\u9fa5]/.test(word.word)) {
+            groups['Chinese'].push(word);
+        } else {
+            groups['English/Other'].push(word);
+        }
+    });
+    return groups;
+  }, [vocab]);
 
   const toggleSelection = (id: string) => {
     const newSet = new Set(selectedIds);
@@ -107,13 +132,105 @@ export const VocabularyView: React.FC<Props> = ({ vocab, history, onRemove }) =>
     });
   };
 
+  const renderVocabGroup = (title: string, items: WordEntry[], flag: string) => {
+    if (items.length === 0) return null;
+
+    return (
+        <div key={title} className="mb-8 last:mb-0 animate-in fade-in duration-300">
+            <div className="flex items-center gap-2 mb-3 px-1">
+                <span className="text-xl">{flag}</span>
+                <h3 className="text-sm font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">{title}</h3>
+                <span className="text-xs bg-gray-100 dark:bg-gray-800 text-gray-500 px-2 py-0.5 rounded-full">{items.length}</span>
+            </div>
+            
+            <div className="bg-white dark:bg-[#1c1c1e] rounded-3xl shadow-[0_2px_15px_rgb(0,0,0,0.02)] border border-gray-100 dark:border-white/10 overflow-hidden transition-colors">
+                <div className="block md:table w-full text-left">
+                     {/* Mobile: Card Layout */}
+                     <div className="md:hidden divide-y divide-gray-100 dark:divide-white/5">
+                        {items.map((entry) => (
+                            <div key={entry.id} className="p-4 flex gap-4 items-start active:bg-gray-50 dark:active:bg-white/5 transition-colors">
+                                <input 
+                                    type="checkbox" 
+                                    checked={selectedIds.has(entry.id)}
+                                    onChange={() => toggleSelection(entry.id)}
+                                    className="mt-1.5 rounded-md border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500 w-5 h-5" 
+                                />
+                                <div className="flex-1 min-w-0 space-y-2">
+                                    <div className="flex items-center gap-2">
+                                        <span className="font-bold text-gray-900 dark:text-white text-lg truncate">{entry.word}</span>
+                                        {/* Show Reading or IPA */}
+                                        {(entry.ipa || entry.reading) && (
+                                            <span className="text-xs text-gray-500 dark:text-gray-400 font-mono bg-gray-100 dark:bg-gray-800 px-1.5 rounded">
+                                                {entry.reading || entry.ipa}
+                                            </span>
+                                        )}
+                                    </div>
+                                    <div className="text-sm text-gray-700 dark:text-gray-300 leading-snug">
+                                        <span className="text-gray-400 dark:text-gray-600 text-xs mr-1">中</span>{entry.meaningCn}
+                                    </div>
+                                    {entry.meaningRu && (
+                                    <div className="text-sm text-gray-700 dark:text-gray-300 leading-snug">
+                                        <span className="text-gray-400 dark:text-gray-600 text-xs mr-1">俄</span>{entry.meaningRu}
+                                    </div>
+                                    )}
+                                </div>
+                            </div>
+                        ))}
+                     </div>
+
+                    {/* Desktop: Table Layout */}
+                    <table className="hidden md:table w-full text-left border-collapse">
+                        <tbody className="divide-y divide-gray-50 dark:divide-white/5">
+                            {items.map((entry) => (
+                                <tr key={entry.id} className="hover:bg-blue-50/30 dark:hover:bg-blue-900/10 transition-colors group">
+                                    <td className="p-4 text-center w-12">
+                                        <input 
+                                            type="checkbox" 
+                                            checked={selectedIds.has(entry.id)}
+                                            onChange={() => toggleSelection(entry.id)}
+                                            className="rounded-md border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500 w-4 h-4 cursor-pointer" 
+                                        />
+                                    </td>
+                                    <td className="p-4 w-1/4 align-top">
+                                        <div className="font-semibold text-gray-900 dark:text-white text-lg">{entry.word}</div>
+                                        {(entry.ipa || entry.reading) && (
+                                            <div className="text-xs text-gray-500 dark:text-gray-400 font-mono mt-0.5 bg-gray-100 dark:bg-gray-800 inline-block px-1.5 rounded">
+                                                {entry.reading || entry.ipa}
+                                            </div>
+                                        )}
+                                    </td>
+                                    <td className="p-4 w-1/4 align-top text-gray-700 dark:text-gray-300 leading-relaxed">{entry.meaningCn}</td>
+                                    <td className="p-4 w-1/4 align-top text-gray-700 dark:text-gray-300 leading-relaxed">{entry.meaningRu}</td>
+                                    <td className="p-4 align-top text-gray-500 dark:text-gray-400 text-sm italic leading-relaxed">
+                                        {entry.contextSentence && `"${entry.contextSentence.replace(/^['"“]+|['"”]+$/g, '')}"`}
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    );
+  };
+
   return (
     <div className="p-4 md:p-6 h-full flex flex-col max-w-full relative">
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
             {/* Left: Title & Count */}
             <div>
                 <h2 className="text-2xl font-bold text-gray-900 dark:text-white tracking-tight">生词本</h2>
-                <p className="text-gray-500 dark:text-gray-400 text-sm mt-1">共 {vocab.length} 个单词</p>
+                <div className="flex items-center gap-2 mt-1">
+                    <p className="text-gray-500 dark:text-gray-400 text-sm">共 {vocab.length} 个单词</p>
+                    {vocab.length > 0 && (
+                        <div className="flex gap-1 ml-2 text-xs opacity-60">
+                            {groupedVocab['Japanese'].length > 0 && <span title="日语">🇯🇵 {groupedVocab['Japanese'].length}</span>}
+                            {groupedVocab['Russian'].length > 0 && <span title="俄语">🇷🇺 {groupedVocab['Russian'].length}</span>}
+                            {groupedVocab['Chinese'].length > 0 && <span title="中文">🇨🇳 {groupedVocab['Chinese'].length}</span>}
+                            {groupedVocab['English/Other'].length > 0 && <span title="英语/其他">🇬🇧 {groupedVocab['English/Other'].length}</span>}
+                        </div>
+                    )}
+                </div>
             </div>
             
             {/* Right: Actions Group */}
@@ -144,27 +261,65 @@ export const VocabularyView: React.FC<Props> = ({ vocab, history, onRemove }) =>
             </div>
         </div>
 
+        {/* Action Bar / Select All Row */}
+        {vocab.length > 0 && (
+             <div className="flex items-center gap-2 mb-4 px-1">
+                 <input 
+                     type="checkbox" 
+                     id="selectAll"
+                     onChange={toggleAll}
+                     checked={selectedIds.size === vocab.length}
+                     className="rounded-md border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500 w-4 h-4 cursor-pointer" 
+                 />
+                 <label htmlFor="selectAll" className="text-sm text-gray-600 dark:text-gray-400 cursor-pointer select-none">
+                     全选所有单词
+                 </label>
+             </div>
+        )}
+
+        <div className="flex-1 overflow-y-auto pb-20 scrollbar-hide">
+            {vocab.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-64 text-gray-400 dark:text-gray-600">
+                    <svg className="w-12 h-12 mb-3 text-gray-300 dark:text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"></path></svg>
+                    <p>暂无生词</p>
+                </div>
+            ) : (
+                <>
+                    {renderVocabGroup('日语 (Japanese)', groupedVocab['Japanese'], '🇯🇵')}
+                    {renderVocabGroup('俄语 (Russian)', groupedVocab['Russian'], '🇷🇺')}
+                    {renderVocabGroup('中文 (Chinese)', groupedVocab['Chinese'], '🇨🇳')}
+                    {renderVocabGroup('英语 / 其他 (English/Other)', groupedVocab['English/Other'], '🇬🇧')}
+                </>
+            )}
+        </div>
+
+        {/* ... (Guide and History Modal logic preserved) ... */}
         {showGuide && (
-            <div className="mb-6 bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-500/20 p-4 rounded-xl text-sm text-blue-900 dark:text-blue-100 relative animate-in fade-in slide-in-from-top-2">
-                <button onClick={() => setShowGuide(false)} className="absolute top-2 right-2 text-blue-400 hover:text-blue-600">
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
-                </button>
-                <h4 className="font-bold mb-2 flex items-center gap-2">
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-                    Anki 导入指南
-                </h4>
-                <ol className="list-decimal list-inside space-y-1 ml-1">
-                    <li>打开 Anki 电脑版，点击 <strong>文件 (File) -&gt; 导入 (Import)</strong></li>
-                    <li>选择下载的 CSV 文件</li>
-                    <li>在导入窗口设置：
-                        <ul className="list-disc list-inside ml-4 mt-1 opacity-80">
-                            <li><strong>笔记类型</strong>: 选择 "基础 (Basic)"</li>
-                            <li><strong>字段分隔符</strong>: 确保选择 <strong>"逗号 (Comma)"</strong></li>
-                            <li><strong>字段匹配</strong>: 字段 1 对应 正面，字段 2 对应 背面</li>
-                            <li><strong>关键</strong>: 勾选 "允许在字段中使用 HTML"</li>
-                        </ul>
-                    </li>
-                </ol>
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/30 dark:bg-black/70 backdrop-blur-sm" onClick={() => setShowGuide(false)}>
+                <div onClick={e => e.stopPropagation()} className="bg-white dark:bg-[#1c1c1e] p-6 rounded-2xl max-w-md w-full shadow-2xl border border-white/10 relative">
+                     <button onClick={() => setShowGuide(false)} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600">
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                    </button>
+                    <h4 className="font-bold text-lg mb-4 text-gray-900 dark:text-white flex items-center gap-2">
+                        <svg className="w-5 h-5 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                        Anki 导入指南
+                    </h4>
+                    <ol className="list-decimal list-inside space-y-3 text-sm text-gray-600 dark:text-gray-300">
+                        <li>打开 Anki 电脑版，点击 <strong>文件 (File) -&gt; 导入 (Import)</strong></li>
+                        <li>选择刚刚下载的 CSV 文件</li>
+                        <li className="p-3 bg-gray-50 dark:bg-white/5 rounded-lg border border-gray-100 dark:border-white/5">
+                            <div className="font-semibold mb-1 text-gray-800 dark:text-white">关键设置：</div>
+                            <ul className="list-disc list-inside ml-2 space-y-1 opacity-90">
+                                <li>笔记类型: <strong>基础 (Basic)</strong></li>
+                                <li>字段分隔符: <strong>逗号 (Comma)</strong></li>
+                                <li>勾选: <strong>允许在字段中使用 HTML</strong></li>
+                            </ul>
+                        </li>
+                    </ol>
+                    <button onClick={() => setShowGuide(false)} className="w-full mt-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-medium transition-colors">
+                        我知道了
+                    </button>
+                </div>
             </div>
         )}
 
@@ -251,99 +406,6 @@ export const VocabularyView: React.FC<Props> = ({ vocab, history, onRemove }) =>
                  </div>
              </div>
         )}
-
-        <div className="bg-white dark:bg-[#1c1c1e] rounded-3xl shadow-[0_2px_15px_rgb(0,0,0,0.02)] border border-gray-100 dark:border-white/10 flex-1 overflow-hidden flex flex-col transition-colors">
-             {/* Header */}
-             <div className="hidden md:flex items-center p-4 border-b border-gray-100 dark:border-white/5 bg-gray-50/50 dark:bg-white/5 text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider">
-                <div className="w-12 text-center">
-                    <input 
-                        type="checkbox" 
-                        onChange={toggleAll}
-                        checked={vocab.length > 0 && selectedIds.size === vocab.length}
-                        className="rounded-md border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500 w-4 h-4 cursor-pointer" 
-                    />
-                </div>
-                <div className="w-1/4">单词 / 音标</div>
-                <div className="w-1/4">中文释义</div>
-                <div className="w-1/4">俄语释义</div>
-                <div className="flex-1">例句</div>
-             </div>
-
-            <div className="overflow-y-auto flex-1">
-                {vocab.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center h-64 text-gray-400 dark:text-gray-600">
-                        <svg className="w-12 h-12 mb-3 text-gray-300 dark:text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"></path></svg>
-                        <p>暂无生词</p>
-                    </div>
-                ) : (
-                    <div className="block md:table w-full text-left">
-                        {/* Mobile: Card Layout */}
-                        <div className="md:hidden divide-y divide-gray-100 dark:divide-white/5">
-                            {vocab.map((entry) => (
-                                <div key={entry.id} className="p-4 flex gap-4 items-start active:bg-gray-50 dark:active:bg-white/5 transition-colors">
-                                    <input 
-                                        type="checkbox" 
-                                        checked={selectedIds.has(entry.id)}
-                                        onChange={() => toggleSelection(entry.id)}
-                                        className="mt-1.5 rounded-md border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500 w-5 h-5" 
-                                    />
-                                    <div className="flex-1 min-w-0 space-y-2">
-                                        <div className="flex items-center gap-2">
-                                            <span className="font-bold text-gray-900 dark:text-white text-lg truncate">{entry.word}</span>
-                                            {/* Show Reading or IPA */}
-                                            {(entry.ipa || entry.reading) && (
-                                                <span className="text-xs text-gray-500 dark:text-gray-400 font-mono bg-gray-100 dark:bg-gray-800 px-1.5 rounded">
-                                                    {entry.reading || entry.ipa}
-                                                </span>
-                                            )}
-                                        </div>
-                                        <div className="text-sm text-gray-700 dark:text-gray-300 leading-snug">
-                                            <span className="text-gray-400 dark:text-gray-600 text-xs mr-1">中</span>{entry.meaningCn}
-                                        </div>
-                                        {entry.meaningRu && (
-                                        <div className="text-sm text-gray-700 dark:text-gray-300 leading-snug">
-                                            <span className="text-gray-400 dark:text-gray-600 text-xs mr-1">俄</span>{entry.meaningRu}
-                                        </div>
-                                        )}
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-
-                        {/* Desktop: Table Layout */}
-                        <table className="hidden md:table w-full text-left border-collapse">
-                            <tbody className="divide-y divide-gray-50 dark:divide-white/5">
-                                {vocab.map((entry) => (
-                                    <tr key={entry.id} className="hover:bg-blue-50/30 dark:hover:bg-blue-900/10 transition-colors group">
-                                        <td className="p-4 text-center w-12">
-                                            <input 
-                                                type="checkbox" 
-                                                checked={selectedIds.has(entry.id)}
-                                                onChange={() => toggleSelection(entry.id)}
-                                                className="rounded-md border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500 w-4 h-4 cursor-pointer" 
-                                            />
-                                        </td>
-                                        <td className="p-4 w-1/4 align-top">
-                                            <div className="font-semibold text-gray-900 dark:text-white text-lg">{entry.word}</div>
-                                            {(entry.ipa || entry.reading) && (
-                                                <div className="text-xs text-gray-500 dark:text-gray-400 font-mono mt-0.5 bg-gray-100 dark:bg-gray-800 inline-block px-1.5 rounded">
-                                                    {entry.reading || entry.ipa}
-                                                </div>
-                                            )}
-                                        </td>
-                                        <td className="p-4 w-1/4 align-top text-gray-700 dark:text-gray-300 leading-relaxed">{entry.meaningCn}</td>
-                                        <td className="p-4 w-1/4 align-top text-gray-700 dark:text-gray-300 leading-relaxed">{entry.meaningRu}</td>
-                                        <td className="p-4 align-top text-gray-500 dark:text-gray-400 text-sm italic leading-relaxed">
-                                            {entry.contextSentence && `"${entry.contextSentence.replace(/^['"“]+|['"”]+$/g, '')}"`}
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-                )}
-            </div>
-        </div>
     </div>
   );
 };

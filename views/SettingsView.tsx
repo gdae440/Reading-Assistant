@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { AppSettings, TTSProvider } from '../types';
 
@@ -71,19 +72,20 @@ export const SettingsView: React.FC<Props> = ({ settings, onSave }) => {
                 {/* TTS Provider Tabs */}
                 <div>
                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">语音引擎</label>
-                   <div className="flex p-1 bg-gray-100 dark:bg-gray-800 rounded-xl">
-                       {(['siliconflow', 'azure', 'browser'] as TTSProvider[]).map((provider) => (
+                   <div className="flex p-1 bg-gray-100 dark:bg-gray-800 rounded-xl overflow-x-auto">
+                       {(['siliconflow', 'azure', 'google', 'browser'] as TTSProvider[]).map((provider) => (
                            <button
                                key={provider}
                                onClick={() => handleChange('ttsProvider', provider)}
-                               className={`flex-1 py-2 text-sm font-medium rounded-lg transition-all ${
+                               className={`flex-1 py-2 px-3 text-sm font-medium rounded-lg transition-all whitespace-nowrap ${
                                    settings.ttsProvider === provider
                                    ? 'bg-white dark:bg-gray-600 text-gray-900 dark:text-white shadow-sm'
                                    : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
                                }`}
                            >
                                {provider === 'siliconflow' ? 'SiliconFlow' : 
-                                provider === 'azure' ? 'Azure TTS' : '本地浏览器'}
+                                provider === 'azure' ? 'Azure' : 
+                                provider === 'google' ? 'Google(免费)' : '本地'}
                            </button>
                        ))}
                    </div>
@@ -135,6 +137,13 @@ export const SettingsView: React.FC<Props> = ({ settings, onSave }) => {
                         <p className="text-xs text-blue-600 dark:text-blue-400">
                             提示: 音色选择已移至首页“文章朗读”下方。
                         </p>
+                    </div>
+                )}
+                
+                {/* Google Config */}
+                {settings.ttsProvider === 'google' && (
+                    <div className="p-4 bg-green-50 dark:bg-green-900/20 border border-green-100 dark:border-green-900/30 rounded-xl text-sm text-green-800 dark:text-green-200">
+                        使用 Google Translate 免费接口。支持长文本自动切分朗读。无需 API Key，但仅支持默认音色，无法下载音频。
                     </div>
                 )}
 

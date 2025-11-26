@@ -7,10 +7,11 @@ export const AZURE_VOICES = [
     { label: "🇺🇸 英文 (美) - Brian (男)", value: "en-US-BrianNeural" },
 
     // English (UK)
-    { label: "🇬🇧 英文 (英) - Ollie (男)", value: "en-GB-OllieNeural" },
+    // Ollie removed due to stability issues
     { label: "🇬🇧 英文 (英) - Ryan (男)", value: "en-GB-RyanNeural" },
     { label: "🇬🇧 英文 (英) - Sonia (女)", value: "en-GB-SoniaNeural" },
     { label: "🇬🇧 英文 (英) - Abbi (女)", value: "en-GB-AbbiNeural" },
+    { label: "🇬🇧 英文 (英) - Libby (女)", value: "en-GB-LibbyNeural" },
 
     // Russian
     { label: "🇷🇺 俄文 - Svetlana (女)", value: "ru-RU-SvetlanaNeural" },
@@ -53,20 +54,18 @@ export class AzureTTSService {
     const lang = langMatch ? langMatch[1] : 'en-US';
 
     // SSML to control voice and speed
-    // Speed: 1.0 is default. Azure uses percentage or relative numbers. 
-    // 0.5x -> -50.00%, 1.5x -> +50.00%
-    let rateStr = "0%";
+    // Logic update: If speed is 1.0, do NOT use <prosody>. This fixes compatibility with voices like Ollie.
+    let content = text;
     if (speed !== 1) {
         const percentage = Math.round((speed - 1) * 100);
-        rateStr = `${percentage > 0 ? '+' : ''}${percentage}%`;
+        const rateStr = `${percentage > 0 ? '+' : ''}${percentage}%`;
+        content = `<prosody rate='${rateStr}'>${text}</prosody>`;
     }
 
     const ssml = `
       <speak version='1.0' xml:lang='${lang}'>
         <voice xml:lang='${lang}' name='${voiceName}'>
-          <prosody rate='${rateStr}'>
-            ${text}
-          </prosody>
+          ${content}
         </voice>
       </speak>
     `;
@@ -77,13 +76,16 @@ export class AzureTTSService {
         headers: {
           'Ocp-Apim-Subscription-Key': this.key,
           'Content-Type': 'application/ssml+xml',
-          'X-Microsoft-OutputFormat': 'audio-16khz-128kbitrate-mono-mp3',
-          'User-Agent': 'PolyGlot'
+          'X-Microsoft-OutputFormat': 'audio-16khz-128kbitrate-mono-mp3'
+          // Removed 'User-Agent' to avoid CORS issues in browser
         },
         body: ssml
       });
 
       if (!response.ok) {
+        if (response.status === 429) {
+            throw new Error("Azure_429");
+        }
         const errText = await response.text();
         throw new Error(`Azure TTS Error ${response.status}: ${errText}`);
       }

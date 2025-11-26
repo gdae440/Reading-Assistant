@@ -18,7 +18,7 @@ export interface HistoryEntry {
   timestamp: number;
 }
 
-export type TTSProvider = 'siliconflow' | 'azure' | 'browser';
+export type TTSProvider = 'siliconflow' | 'azure' | 'browser' | 'google';
 
 export interface AppSettings {
   apiKey: string; // SiliconFlow Key
