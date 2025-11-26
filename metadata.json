@@ -1,0 +1,5 @@
+{
+  "name": "跟读助手",
+  "description": "A multilingual shadowing assistant powered by SiliconFlow AI. Features text-to-speech, OCR, translation, and vocabulary management.",
+  "requestFramePermissions": []
+}
