@@ -1,6 +1,5 @@
-
 import React, { useState } from 'react';
-import { Tab, AppSettings, WordEntry } from './types';
+import { Tab, AppSettings, WordEntry, HistoryEntry } from './types';
 import { useLocalStorage } from './hooks/useLocalStorage';
 import { ReaderView } from './views/ReaderView';
 import { VocabularyView } from './views/VocabularyView';
@@ -30,6 +29,7 @@ function App() {
   // they will merge or need migration. For now, we assume clean slate or compatible types.
   const [settings, setSettings] = useLocalStorage<AppSettings>('polyglot_settings', DEFAULT_SETTINGS);
   const [vocab, setVocab] = useLocalStorage<WordEntry[]>('polyglot_vocab', []);
+  const [history, setHistory] = useLocalStorage<HistoryEntry[]>('polyglot_history', []);
 
   const handleAddToVocab = (entry: WordEntry) => {
     setVocab((currentVocab) => {
@@ -58,6 +58,13 @@ function App() {
     });
   };
 
+  const handleAddToHistory = (entry: HistoryEntry) => {
+    setHistory((prev) => {
+        const newHistory = [entry, ...prev];
+        return newHistory.slice(0, 50); // Keep max 50 entries
+    });
+  };
+
   const renderContent = () => {
     switch (activeTab) {
       case Tab.READER:
@@ -67,10 +74,11 @@ function App() {
                 onAddToVocab={handleAddToVocab} 
                 onUpdateVocabEntry={handleUpdateVocabEntry}
                 onSettingsChange={setSettings}
+                onAddToHistory={handleAddToHistory}
             />
         );
       case Tab.VOCABULARY:
-        return <VocabularyView vocab={vocab} onRemove={handleRemoveFromVocab} />;
+        return <VocabularyView vocab={vocab} history={history} onRemove={handleRemoveFromVocab} />;
       case Tab.SETTINGS:
         return <SettingsView settings={settings} onSave={setSettings} />;
       default:
@@ -79,29 +87,29 @@ function App() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col selection:bg-blue-100 selection:text-blue-900">
+    <div className="min-h-screen flex flex-col selection:bg-blue-100 selection:text-blue-900 dark:selection:bg-blue-900 dark:selection:text-blue-100">
       {/* Navbar: Apple style blurred sticky header */}
       {/* 
         Fix for iPhone PWA/Notch:
         pt-[env(safe-area-inset-top)] ensures content starts below the status bar/Dynamic Island
         The background (glass-panel) will stretch to the top edge.
       */}
-      <nav className="sticky top-0 z-50 glass-panel border-b border-gray-200/50 pt-[env(safe-area-inset-top)] transition-all">
+      <nav className="sticky top-0 z-50 glass-panel border-b border-gray-200/50 dark:border-white/10 pt-[env(safe-area-inset-top)] transition-all">
         <div className="max-w-5xl mx-auto px-6">
           <div className="flex items-center justify-between h-14">
             <div className="flex items-center gap-2">
-                <span className="text-lg font-bold tracking-tight text-black">
+                <span className="text-lg font-bold tracking-tight text-black dark:text-white">
                   跟读助手
                 </span>
             </div>
             
-            <div className="flex space-x-1 bg-gray-100/80 p-1 rounded-full backdrop-blur-sm">
+            <div className="flex space-x-1 bg-gray-100/80 dark:bg-gray-800/80 p-1 rounded-full backdrop-blur-sm">
               <button
                 onClick={() => setActiveTab(Tab.READER)}
                 className={`px-5 py-1.5 rounded-full text-xs font-medium transition-all duration-300 ${
                   activeTab === Tab.READER 
-                  ? 'bg-white text-black shadow-sm' 
-                  : 'text-gray-500 hover:text-gray-900'
+                  ? 'bg-white dark:bg-gray-600 text-black dark:text-white shadow-sm' 
+                  : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
                 }`}
               >
                 文章朗读
@@ -110,8 +118,8 @@ function App() {
                 onClick={() => setActiveTab(Tab.VOCABULARY)}
                 className={`px-5 py-1.5 rounded-full text-xs font-medium transition-all duration-300 ${
                   activeTab === Tab.VOCABULARY
-                  ? 'bg-white text-black shadow-sm' 
-                  : 'text-gray-500 hover:text-gray-900'
+                  ? 'bg-white dark:bg-gray-600 text-black dark:text-white shadow-sm' 
+                  : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
                 }`}
               >
                 生词本
@@ -120,8 +128,8 @@ function App() {
                 onClick={() => setActiveTab(Tab.SETTINGS)}
                 className={`px-5 py-1.5 rounded-full text-xs font-medium transition-all duration-300 ${
                   activeTab === Tab.SETTINGS
-                  ? 'bg-white text-black shadow-sm' 
-                  : 'text-gray-500 hover:text-gray-900'
+                  ? 'bg-white dark:bg-gray-600 text-black dark:text-white shadow-sm' 
+                  : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
                 }`}
               >
                 设置

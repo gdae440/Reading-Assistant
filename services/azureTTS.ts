@@ -18,6 +18,10 @@ export const AZURE_VOICES = [
     { label: "🇷🇺 俄文 - Dmitry (男)", value: "ru-RU-DmitryNeural" },
     { label: "🇷🇺 俄文 - Donat (男)", value: "ru-RU-DonatNeural" },
 
+    // Japanese
+    { label: "🇯🇵 日文 - Nanami (女)", value: "ja-JP-NanamiNeural" },
+    { label: "🇯🇵 日文 - Keita (男)", value: "ja-JP-KeitaNeural" },
+
     // Chinese
     { label: "🇨🇳 中文 -晓晓 (女)", value: "zh-CN-XiaoxiaoNeural" },
     { label: "🇨🇳 中文 -云希 (男)", value: "zh-CN-YunxiNeural" },

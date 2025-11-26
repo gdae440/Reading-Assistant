@@ -1,4 +1,3 @@
-
 import { LookupResult } from "../types";
 
 const BASE_URL = "https://api.siliconflow.cn/v1";
@@ -18,23 +17,66 @@ export class SiliconFlowService {
   }
 
   /**
-   * Fast lookup: Only gets definitions and IPA. No examples.
-   * @param contextLang - The detected language of the article (e.g., 'ru', 'zh', 'en')
+   * Fast lookup: Optimized for different languages (Japanese, Russian, English).
    */
   async lookupWordFast(word: string, model: string, contextLang: string = 'en'): Promise<LookupResult> {
-    let prompt = `
-    请分析这个单词或短语: "${word}".
-    返回一个包含以下字段的 JSON 对象:
-    - "word": 原词 (纠正大小写)
-    - "ipa": IPA 音标 (如果是英文或有必要，否则为 null)
-    - "cn": 中文简洁释义 (不要长篇大论)
-    `;
+    // 1. Detect script of the word to decide the prompt strategy
+    const hasKana = /[\u3040-\u30ff\u3400-\u4dbf]/.test(word); // Hiragana, Katakana
+    const hasKanji = /[\u4e00-\u9fff]/.test(word); // Kanji / Hanzi
+    const isRussian = /[а-яА-ЯЁё]/.test(word);
+    const isEnglish = /^[a-zA-Z\s-]+$/.test(word);
 
-    // If the article is already in Russian, we don't need a Russian translation of a Russian word.
-    if (contextLang === 'ru') {
-        prompt += `- "ru": null (不需要俄语释义，因为原文就是俄语)\n`;
+    let targetLang = 'other';
+    if (hasKana) {
+        targetLang = 'ja';
+    } else if (hasKanji) {
+        // Ambiguous: Pure Kanji word (e.g., "先生"). Could be JP or CN.
+        // Use contextLang to disambiguate.
+        targetLang = contextLang === 'ja' ? 'ja' : 'zh';
+    } else if (isRussian) {
+        targetLang = 'ru';
+    } else if (isEnglish) {
+        targetLang = 'en';
+    }
+
+    let prompt = `请分析这个单词或短语: "${word}".\n返回一个包含以下字段的 JSON 对象:\n`;
+
+    if (targetLang === 'ja') {
+        // Japanese Strategy: Reading (Furigana) + CN Meaning. No IPA, No RU.
+        prompt += `
+        - "word": 原词
+        - "reading": 平假名读音 (Furigana)
+        - "cn": 中文简洁释义
+        - "ipa": null
+        - "ru": null
+        `;
+    } else if (targetLang === 'ru') {
+        // Russian Strategy: Word with stress marks + CN Meaning. No IPA, No RU.
+        prompt += `
+        - "word": 单词 (必须在主元音上标注正确的重音符号，例如 соба́ка)
+        - "cn": 中文简洁释义
+        - "reading": null
+        - "ipa": null
+        - "ru": null
+        `;
+    } else if (targetLang === 'en') {
+        // English Strategy: IPA + CN + RU (Dual translation)
+        prompt += `
+        - "word": 原词 (纠正大小写)
+        - "ipa": DJ 或 KK 音标
+        - "cn": 中文简洁释义
+        - "ru": 俄语简洁释义
+        - "reading": null
+        `;
     } else {
-        prompt += `- "ru": 俄语简洁释义\n`;
+        // Fallback Strategy (Chinese or others)
+        prompt += `
+        - "word": 原词
+        - "cn": 中文简洁释义
+        - "ipa": null
+        - "ru": null
+        - "reading": null
+        `;
     }
     
     prompt += `\n只返回有效的 JSON。`;
@@ -47,8 +89,8 @@ export class SiliconFlowService {
           model: model,
           messages: [{ role: "user", content: prompt }],
           response_format: { type: "json_object" },
-          temperature: 0.1, // Lower temp for factual data
-          max_tokens: 200   // Limit tokens for speed
+          temperature: 0.1,
+          max_tokens: 300
         })
       });
 
@@ -183,6 +225,49 @@ export class SiliconFlowService {
       return data.choices[0].message.content;
     } catch (error) {
       console.error("Translation Error:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * Generates a context-aware reply in Russian based on mixed input.
+   */
+  async generateContextAwareReply(text: string, model: string): Promise<string> {
+    const prompt = `
+    你是一个精通中俄双语的沟通助手。
+    用户输入的文本可能包含两部分：
+    1. 上下文/对方的消息 (通常是俄语，也可能是空)。
+    2. 用户想要回复的内容 (通常是中文)。
+
+    请分析文本：
+    1. 识别对话的语境。
+       - 如果语境显示对象是老师、长辈或陌生人，生成的俄语回复请务必使用敬语 (Вы)。
+       - 如果语境显示对象是同学、朋友或家人，可以使用自然口语 (ты)。
+    2. 结合上下文，将用户的中文意图翻译成地道、自然的俄语回复。
+    3. 如果文本只有中文，则直接将其翻译成得体的俄语。
+
+    ⚠️ 重要：只输出生成的俄语回复内容，不要输出任何分析过程或"以下是回复"之类的废话。
+    `;
+
+    try {
+      const response = await fetch(`${BASE_URL}/chat/completions`, {
+        method: "POST",
+        headers: this.getHeaders(),
+        body: JSON.stringify({
+          model: model,
+          messages: [
+             { role: "system", content: "You are a helpful assistant for Russian communication." },
+             { role: "user", content: prompt },
+             { role: "user", content: `用户输入内容:\n${text}` }
+          ]
+        })
+      });
+
+      if (!response.ok) throw new Error("Reply generation failed");
+      const data = await response.json();
+      return data.choices[0].message.content;
+    } catch (error) {
+      console.error("Reply Generation Error:", error);
       throw error;
     }
   }

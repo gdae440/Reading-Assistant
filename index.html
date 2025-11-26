@@ -7,13 +7,18 @@
     
     <!-- Apple PWA Settings -->
     <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <meta name="apple-mobile-web-app-title" content="跟读助手">
     
     <!-- Icons (Optional: Replace href with actual icon URLs if you host them) -->
     <link rel="apple-touch-icon" href="https://placehold.co/180x180/000000/FFF.png?text=Poly">
     
     <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        darkMode: 'media', // Automatically switch based on system settings
+      }
+    </script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
       /* Apple-style system font stack fallback with Inter */
@@ -28,10 +33,17 @@
       ::-webkit-scrollbar { width: 0px; background: transparent; }
       
       .glass-panel {
-        background: rgba(255, 255, 255, 0.7);
+        background: rgba(255, 255, 255, 0.75);
         backdrop-filter: blur(20px);
         -webkit-backdrop-filter: blur(20px);
         border: 1px solid rgba(255, 255, 255, 0.5);
+      }
+      
+      @media (prefers-color-scheme: dark) {
+        .glass-panel {
+          background: rgba(28, 28, 30, 0.75);
+          border: 1px solid rgba(255, 255, 255, 0.1);
+        }
       }
       
       .ios-switch {
@@ -51,7 +63,7 @@
 }
 </script>
 </head>
-  <body class="bg-[#F5F5F7] text-[#1D1D1F] safe-area-inset-bottom">
+  <body class="bg-[#F5F5F7] text-[#1D1D1F] dark:bg-black dark:text-[#F5F5F7] safe-area-inset-bottom transition-colors duration-300">
     <div id="root"></div>
     <script type="module" src="/index.tsx"></script>
   </body>

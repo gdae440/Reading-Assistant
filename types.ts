@@ -2,10 +2,19 @@
 export interface WordEntry {
   id: string;
   word: string;
+  reading?: string; // e.g., Japanese Furigana
   ipa?: string;
   meaningCn: string;
   meaningRu: string;
   contextSentence?: string;
+  timestamp: number;
+}
+
+export interface HistoryEntry {
+  id: string;
+  original: string;
+  translation: string;
+  type: 'translation' | 'reply';
   timestamp: number;
 }
 
@@ -38,6 +47,7 @@ export enum Tab {
 
 export interface LookupResult {
   word: string;
+  reading?: string; // New: pronunciation for non-Latin scripts
   ipa: string;
   cn: string;
   ru: string;
