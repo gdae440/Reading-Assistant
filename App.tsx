@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { Tab, AppSettings, WordEntry } from './types';
 import { useLocalStorage } from './hooks/useLocalStorage';
@@ -65,6 +66,7 @@ function App() {
                 settings={settings} 
                 onAddToVocab={handleAddToVocab} 
                 onUpdateVocabEntry={handleUpdateVocabEntry}
+                onSettingsChange={setSettings}
             />
         );
       case Tab.VOCABULARY:
@@ -79,7 +81,12 @@ function App() {
   return (
     <div className="min-h-screen flex flex-col selection:bg-blue-100 selection:text-blue-900">
       {/* Navbar: Apple style blurred sticky header */}
-      <nav className="sticky top-0 z-50 glass-panel border-b border-gray-200/50">
+      {/* 
+        Fix for iPhone PWA/Notch:
+        pt-[env(safe-area-inset-top)] ensures content starts below the status bar/Dynamic Island
+        The background (glass-panel) will stretch to the top edge.
+      */}
+      <nav className="sticky top-0 z-50 glass-panel border-b border-gray-200/50 pt-[env(safe-area-inset-top)] transition-all">
         <div className="max-w-5xl mx-auto px-6">
           <div className="flex items-center justify-between h-14">
             <div className="flex items-center gap-2">

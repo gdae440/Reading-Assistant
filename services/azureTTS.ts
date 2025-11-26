@@ -1,4 +1,36 @@
 
+export const AZURE_VOICES = [
+    // English (US)
+    { label: "🇺🇸 英文 (美) - Ava (多语言)", value: "en-US-AvaMultilingualNeural" },
+    { label: "🇺🇸 英文 (美) - Emma (女)", value: "en-US-EmmaNeural" },
+    { label: "🇺🇸 英文 (美) - Andrew (多语言)", value: "en-US-AndrewMultilingualNeural" },
+    { label: "🇺🇸 英文 (美) - Brian (男)", value: "en-US-BrianNeural" },
+
+    // English (UK)
+    { label: "🇬🇧 英文 (英) - Ollie (男)", value: "en-GB-OllieNeural" },
+    { label: "🇬🇧 英文 (英) - Ryan (男)", value: "en-GB-RyanNeural" },
+    { label: "🇬🇧 英文 (英) - Sonia (女)", value: "en-GB-SoniaNeural" },
+    { label: "🇬🇧 英文 (英) - Abbi (女)", value: "en-GB-AbbiNeural" },
+
+    // Russian
+    { label: "🇷🇺 俄文 - Svetlana (女)", value: "ru-RU-SvetlanaNeural" },
+    { label: "🇷🇺 俄文 - Dariya (女)", value: "ru-RU-DariyaNeural" },
+    { label: "🇷🇺 俄文 - Dmitry (男)", value: "ru-RU-DmitryNeural" },
+    { label: "🇷🇺 俄文 - Donat (男)", value: "ru-RU-DonatNeural" },
+
+    // Chinese
+    { label: "🇨🇳 中文 -晓晓 (女)", value: "zh-CN-XiaoxiaoNeural" },
+    { label: "🇨🇳 中文 -云希 (男)", value: "zh-CN-YunxiNeural" },
+
+    // French
+    { label: "🇫🇷 法文 - Denise (女)", value: "fr-FR-DeniseNeural" },
+    { label: "🇫🇷 法文 - Henri (男)", value: "fr-FR-HenriNeural" },
+
+    // Italian
+    { label: "🇮🇹 意文 - Isabella (女)", value: "it-IT-IsabellaNeural" },
+    { label: "🇮🇹 意文 - Diego (男)", value: "it-IT-DiegoNeural" },
+];
+
 export class AzureTTSService {
   private key: string;
   private region: string;
@@ -11,6 +43,11 @@ export class AzureTTSService {
   async generateSpeech(text: string, voiceName: string, speed: number): Promise<ArrayBuffer> {
     const url = `https://${this.region}.tts.speech.microsoft.com/cognitiveservices/v1`;
     
+    // Extract language from voice name (e.g., "en-US" from "en-US-AvaMultilingualNeural")
+    // Default to en-US if parsing fails
+    const langMatch = voiceName.match(/^([a-z]{2}-[A-Z]{2})/);
+    const lang = langMatch ? langMatch[1] : 'en-US';
+
     // SSML to control voice and speed
     // Speed: 1.0 is default. Azure uses percentage or relative numbers. 
     // 0.5x -> -50.00%, 1.5x -> +50.00%
@@ -21,8 +58,8 @@ export class AzureTTSService {
     }
 
     const ssml = `
-      <speak version='1.0' xml:lang='en-US'>
-        <voice xml:lang='en-US' xml:gender='Female' name='${voiceName}'>
+      <speak version='1.0' xml:lang='${lang}'>
+        <voice xml:lang='${lang}' name='${voiceName}'>
           <prosody rate='${rateStr}'>
             ${text}
           </prosody>

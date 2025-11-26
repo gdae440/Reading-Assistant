@@ -19,18 +19,25 @@ export class SiliconFlowService {
 
   /**
    * Fast lookup: Only gets definitions and IPA. No examples.
+   * @param contextLang - The detected language of the article (e.g., 'ru', 'zh', 'en')
    */
-  async lookupWordFast(word: string, model: string): Promise<LookupResult> {
-    const prompt = `
+  async lookupWordFast(word: string, model: string, contextLang: string = 'en'): Promise<LookupResult> {
+    let prompt = `
     请分析这个单词或短语: "${word}".
     返回一个包含以下字段的 JSON 对象:
     - "word": 原词 (纠正大小写)
-    - "ipa": IPA 音标 (如果是英文，否则为 null)
+    - "ipa": IPA 音标 (如果是英文或有必要，否则为 null)
     - "cn": 中文简洁释义 (不要长篇大论)
-    - "ru": 俄语简洁释义
-    
-    只返回有效的 JSON。
     `;
+
+    // If the article is already in Russian, we don't need a Russian translation of a Russian word.
+    if (contextLang === 'ru') {
+        prompt += `- "ru": null (不需要俄语释义，因为原文就是俄语)\n`;
+    } else {
+        prompt += `- "ru": 俄语简洁释义\n`;
+    }
+    
+    prompt += `\n只返回有效的 JSON。`;
 
     try {
       const response = await fetch(`${BASE_URL}/chat/completions`, {
@@ -66,11 +73,12 @@ export class SiliconFlowService {
    */
   async generateExample(word: string, model: string): Promise<string> {
     const prompt = `
-    请为单词 "${word}" 生成一个简短的英文例句。
+    请为单词 "${word}" 生成一个简短的例句。
     要求：
-    1. **优先与音乐相关**（歌词、乐器、乐理、演出现场等）。
-    2. 如果无法关联音乐，则提供生活实用例句。
-    3. 直接返回例句文本，不要包含任何解释或引号。
+    1. **例句必须使用单词 "${word}" 所属的语言** (例如单词是俄语就造俄语例句)。
+    2. **优先与音乐相关**（歌词、乐器、乐理、演出现场等）。
+    3. 如果无法关联音乐，则提供生活实用例句。
+    4. 直接返回例句文本，不要包含任何解释或引号。
     `;
 
     try {
@@ -81,7 +89,7 @@ export class SiliconFlowService {
           model: model,
           messages: [{ role: "user", content: prompt }],
           temperature: 0.7, // Higher temp for creativity
-          max_tokens: 100
+          max_tokens: 150
         })
       });
 

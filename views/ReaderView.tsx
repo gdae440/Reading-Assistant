@@ -1,20 +1,38 @@
-import React, { useState, useRef, useEffect } from 'react';
+
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { AppSettings, WordEntry, LookupResult } from '../types';
 import { SiliconFlowService } from '../services/siliconFlow';
-import { AzureTTSService } from '../services/azureTTS';
+import { AzureTTSService, AZURE_VOICES } from '../services/azureTTS';
 import { WordDetailModal } from '../components/WordDetailModal';
+import { useLocalStorage } from '../hooks/useLocalStorage';
 
 interface Props {
   settings: AppSettings;
   onAddToVocab: (entry: WordEntry) => void;
   onUpdateVocabEntry: (id: string, updates: Partial<WordEntry>) => void;
+  onSettingsChange: (newSettings: AppSettings) => void;
 }
 
-export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVocabEntry }) => {
-  const [text, setText] = useState('');
-  const [translation, setTranslation] = useState('');
+const COSY_VOICES = [
+    { label: "女声 - Bella (温柔)", value: "FunAudioLLM/CosyVoice2-0.5B:bella" },
+    { label: "女声 - Anna (新闻)", value: "FunAudioLLM/CosyVoice2-0.5B:anna" },
+    { label: "女声 - Claire (清晰)", value: "FunAudioLLM/CosyVoice2-0.5B:claire" },
+    { label: "男声 - Alex (沉稳)", value: "FunAudioLLM/CosyVoice2-0.5B:alex" },
+    { label: "男声 - Benjamin (英伦风)", value: "FunAudioLLM/CosyVoice2-0.5B:benjamin" },
+    { label: "男声 - Bob (欢快)", value: "FunAudioLLM/CosyVoice2-0.5B:bob" },
+    { label: "男声 - Charles (磁性)", value: "FunAudioLLM/CosyVoice2-0.5B:charles" },
+    { label: "男声 - David (标准)", value: "FunAudioLLM/CosyVoice2-0.5B:david" },
+];
+
+export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVocabEntry, onSettingsChange }) => {
+  // Persistence: Use local storage for text and translation so they survive tab switches
+  const [text, setText] = useLocalStorage<string>('reader_text', '');
+  const [translation, setTranslation] = useLocalStorage<string>('reader_translation', '');
+  
   const [isProcessing, setIsProcessing] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+
   const [lookupPos, setLookupPos] = useState<{ x: number, y: number } | null>(null);
   const [lookupData, setLookupData] = useState<LookupResult | null>(null);
   const [isLookingUp, setIsLookingUp] = useState(false);
@@ -30,6 +48,34 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
       stopAudio();
     };
   }, []);
+
+  // --- Auto-Detect Language & Recommend Voice ---
+  const detectedLang = useMemo(() => {
+    if (!text) return 'en';
+    const sample = text.substring(0, 100);
+    // Russian (Cyrillic)
+    if (/[а-яА-ЯЁё]/.test(sample)) return 'ru';
+    // Chinese
+    if (/[\u4e00-\u9fa5]/.test(sample)) return 'zh';
+    // Default Latin
+    return 'en';
+  }, [text]);
+
+  const availableVoices = useMemo(() => {
+    if (settings.ttsProvider === 'azure') {
+        // Filter AZURE_VOICES based on detected language, but allow "All" fallback or specific switch
+        if (detectedLang === 'ru') {
+            return AZURE_VOICES.filter(v => v.value.startsWith('ru-RU'));
+        }
+        if (detectedLang === 'zh') {
+            return AZURE_VOICES.filter(v => v.value.startsWith('zh-CN'));
+        }
+        // For 'en' or others, show English + FR + IT + Others
+        return AZURE_VOICES.filter(v => !v.value.startsWith('ru-RU') && !v.value.startsWith('zh-CN'));
+    }
+    // SiliconFlow CosyVoice
+    return COSY_VOICES;
+  }, [settings.ttsProvider, detectedLang]);
 
   const onMouseUp = (e: React.MouseEvent<HTMLTextAreaElement> | React.TouchEvent<HTMLTextAreaElement>) => {
     const textarea = textareaRef.current;
@@ -79,33 +125,26 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
     }
 
     try {
-      // 1. Fast Lookup (Definition Only)
-      const result = await sfService.lookupWordFast(word, settings.llmModel);
-      
-      // Update UI immediately
+      // Pass detectedLang so we don't fetch Russian translations for Russian words
+      const result = await sfService.lookupWordFast(word, settings.llmModel, detectedLang);
       setLookupData(result);
       
-      // Generate a truly unique ID to prevent collision bugs when adding words quickly
       const newId = Date.now().toString() + "-" + Math.random().toString(36).substring(2, 9);
-      
-      // 2. Add to Vocab immediately (without example)
       onAddToVocab({
         id: newId,
         word: result.word,
         ipa: result.ipa,
         meaningCn: result.cn,
         meaningRu: result.ru,
-        contextSentence: '', // Placeholder
+        contextSentence: '', 
         timestamp: Date.now()
       });
       
-      setIsLookingUp(false); // Stop loading indicator on UI
+      setIsLookingUp(false);
 
-      // 3. Async: Generate Example in background
       sfService.generateExample(result.word, settings.llmModel).then(example => {
          if (example) {
              onUpdateVocabEntry(newId, { contextSentence: example });
-             // Update local modal data if still open
              setLookupData(prev => prev && prev.word === result.word ? { ...prev, example } : prev);
          }
       });
@@ -163,11 +202,16 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
     if (!text) return;
     setIsPlaying(true);
 
+    // Clear previous download URL if any to avoid confusion
+    if (audioUrl) {
+        URL.revokeObjectURL(audioUrl);
+        setAudioUrl(null);
+    }
+
     try {
         let audioBuffer: ArrayBuffer | null = null;
 
         if (settings.ttsProvider === 'siliconflow') {
-            // --- SiliconFlow TTS ---
             if (!settings.apiKey) throw new Error("请配置 SiliconFlow API Key");
             if (!settings.sfTtsVoice) throw new Error("请选择语音音色");
             
@@ -179,17 +223,19 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
             );
 
         } else if (settings.ttsProvider === 'azure') {
-            // --- Azure TTS ---
             if (!settings.azureKey || !settings.azureRegion) throw new Error("请配置 Azure Key 和 Region");
+            
+            const voice = settings.azureVoice || 'en-US-AvaMultilingualNeural';
+
             const azureService = new AzureTTSService(settings.azureKey, settings.azureRegion);
             audioBuffer = await azureService.generateSpeech(
                 text.substring(0, 4000),
-                settings.azureVoice || 'en-US-AvaMultilingualNeural',
+                voice,
                 settings.ttsSpeed
             );
 
         } else {
-            // --- Browser TTS ---
+            // Browser TTS
             if ('speechSynthesis' in window) {
                 const utterance = new SpeechSynthesisUtterance(text);
                 utterance.rate = settings.ttsSpeed;
@@ -200,16 +246,16 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
                 utterance.onend = () => setIsPlaying(false);
                 window.speechSynthesis.cancel();
                 window.speechSynthesis.speak(utterance);
-                return; // Browser TTS handles playback itself
+                return; 
             } else {
                 throw new Error("浏览器不支持本地 TTS");
             }
         }
 
-        // Play Audio Buffer (SiliconFlow / Azure)
         if (audioBuffer) {
             const blob = new Blob([audioBuffer], { type: 'audio/mp3' });
             const url = URL.createObjectURL(blob);
+            setAudioUrl(url); // Save URL for download
             
             if (audioRef.current) {
                 audioRef.current.pause();
@@ -229,16 +275,25 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
   const stopAudio = () => {
     if (audioRef.current) {
         audioRef.current.pause();
-        audioRef.current = null;
     }
     window.speechSynthesis.cancel();
     setIsPlaying(false);
   };
 
+  const handleVoiceChange = (val: string) => {
+      if (settings.ttsProvider === 'siliconflow') {
+          onSettingsChange({ ...settings, sfTtsVoice: val });
+      } else {
+          onSettingsChange({ ...settings, azureVoice: val });
+      }
+  };
+
+  const currentVoice = settings.ttsProvider === 'siliconflow' ? settings.sfTtsVoice : settings.azureVoice;
+
   return (
-    <div className="flex flex-col min-h-[calc(100vh-4rem)] p-4 md:p-6 gap-6">
+    <div className="flex flex-col min-h-[calc(100vh-4rem)] p-4 md:p-6 gap-6 pb-40">
       
-      {/* Control Bar */}
+      {/* Top Action Bar */}
       <div className="bg-white/80 backdrop-blur-xl p-4 rounded-3xl shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-white flex flex-col md:flex-row gap-4 items-stretch md:items-center justify-between z-10 sticky top-4 md:relative">
         <div className="flex flex-wrap items-center gap-3">
             <button 
@@ -299,9 +354,8 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
         {/* Source Text Area */}
         <div className="relative flex flex-col min-h-[40vh] md:min-h-[400px] bg-white rounded-3xl shadow-[0_2px_15px_rgb(0,0,0,0.02)] border border-gray-100 overflow-hidden">
             <div className="px-6 py-3 border-b border-gray-50 flex justify-between items-center bg-gray-50/30">
-                <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider">原文</label>
+                <label className="text-xs font-semibold text-gray-400 uppercase tracking-wider">原文 (自动检测语言: {detectedLang === 'zh' ? '中文' : detectedLang === 'ru' ? '俄语' : '英语/拉丁'})</label>
                 <span className="text-xs text-gray-400 hidden md:inline">选中文本即可查词</span>
-                <span className="text-xs text-gray-400 md:hidden">长按文本即可查词</span>
             </div>
             <textarea
                 ref={textareaRef}
@@ -333,6 +387,70 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
             </div>
         </div>
         )}
+      </div>
+
+      {/* Floating Control Panel (Bottom) */}
+      {/* 
+        Fix for iPhone PWA Bottom Bar:
+        pb-[calc(env(safe-area-inset-bottom)+1rem)] ensures content sits above the Home Indicator
+      */}
+      <div className="fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-xl border-t border-gray-200 p-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] z-40 shadow-[0_-5px_20px_rgb(0,0,0,0.05)]">
+        <div className="max-w-5xl mx-auto flex flex-col md:flex-row gap-4 md:gap-8 items-center justify-between">
+            
+            {/* Voice Selection */}
+            <div className="w-full md:w-1/3 flex items-end gap-3">
+                <div className="flex-1">
+                    <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">
+                        当前音色 ({settings.ttsProvider === 'azure' ? 'Azure' : settings.ttsProvider === 'siliconflow' ? 'CosyVoice' : '本地'})
+                    </label>
+                    {settings.ttsProvider === 'browser' ? (
+                         <div className="text-sm text-gray-500">使用浏览器默认音色</div>
+                    ) : (
+                        <select 
+                            value={currentVoice}
+                            onChange={(e) => handleVoiceChange(e.target.value)}
+                            className="w-full px-4 py-2 bg-gray-100 border-transparent rounded-xl text-sm font-medium text-gray-800 focus:ring-2 focus:ring-blue-500/20 focus:bg-white transition-all appearance-none"
+                        >
+                            {settings.ttsProvider === 'siliconflow' && !COSY_VOICES.some(v => v.value === currentVoice) && (
+                                <option value="">请选择音色...</option>
+                            )}
+                            {availableVoices.map((v) => (
+                                <option key={v.value} value={v.value}>{v.label}</option>
+                            ))}
+                        </select>
+                    )}
+                </div>
+
+                {audioUrl && (
+                    <a 
+                        href={audioUrl} 
+                        download={`polyglot-audio-${Date.now()}.mp3`}
+                        className="flex items-center justify-center w-10 h-10 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl transition-colors mb-0.5"
+                        title="下载生成的音频"
+                    >
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                    </a>
+                )}
+            </div>
+
+            {/* Speed Slider */}
+            <div className="w-full md:w-1/2 flex flex-col gap-2">
+                 <div className="flex justify-between text-xs font-bold text-gray-400 uppercase tracking-wider">
+                    <span>慢速</span>
+                    <span>语速: {settings.ttsSpeed}x</span>
+                    <span>快速</span>
+                 </div>
+                 <input 
+                    type="range" 
+                    min="0.5" 
+                    max="1.5" 
+                    step="0.05" 
+                    value={settings.ttsSpeed}
+                    onChange={(e) => onSettingsChange({ ...settings, ttsSpeed: parseFloat(e.target.value) })}
+                    className="w-full accent-black h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer" 
+                 />
+            </div>
+        </div>
       </div>
 
       <WordDetailModal 

@@ -7,23 +7,10 @@ interface Props {
   onSave: (settings: AppSettings) => void;
 }
 
-const COSY_VOICES = [
-    { label: "女声 - Bella (温柔)", value: "FunAudioLLM/CosyVoice2-0.5B:bella" },
-    { label: "女声 - Anna (新闻)", value: "FunAudioLLM/CosyVoice2-0.5B:anna" },
-    { label: "女声 - Claire (清晰)", value: "FunAudioLLM/CosyVoice2-0.5B:claire" },
-    { label: "男声 - Alex (沉稳)", value: "FunAudioLLM/CosyVoice2-0.5B:alex" },
-    { label: "男声 - Benjamin (英伦风)", value: "FunAudioLLM/CosyVoice2-0.5B:benjamin" },
-    { label: "男声 - Bob (欢快)", value: "FunAudioLLM/CosyVoice2-0.5B:bob" },
-    { label: "男声 - Charles (磁性)", value: "FunAudioLLM/CosyVoice2-0.5B:charles" },
-    { label: "男声 - David (标准)", value: "FunAudioLLM/CosyVoice2-0.5B:david" },
-];
-
 export const SettingsView: React.FC<Props> = ({ settings, onSave }) => {
   const handleChange = (key: keyof AppSettings, value: any) => {
     onSave({ ...settings, [key]: value });
   };
-
-  const isCosyVoice = settings.sfTtsModel === 'FunAudioLLM/CosyVoice2-0.5B';
 
   return (
     <div className="w-full max-w-2xl mx-auto p-4 md:p-8 pb-24">
@@ -117,33 +104,9 @@ export const SettingsView: React.FC<Props> = ({ settings, onSave }) => {
                                 <option value="IndexTeam/IndexTTS-2">IndexTeam/IndexTTS-2</option>
                             </select>
                         </div>
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-2">音色 (Voice ID)</label>
-                            {isCosyVoice ? (
-                                <select 
-                                    value={settings.sfTtsVoice}
-                                    onChange={(e) => handleChange('sfTtsVoice', e.target.value)}
-                                    className="w-full px-4 py-2.5 bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 text-gray-800"
-                                >
-                                    {!COSY_VOICES.some(v => v.value === settings.sfTtsVoice) && (
-                                        <option value="">请选择音色...</option>
-                                    )}
-                                    {COSY_VOICES.map((voice) => (
-                                        <option key={voice.value} value={voice.value}>
-                                            {voice.label}
-                                        </option>
-                                    ))}
-                                </select>
-                            ) : (
-                                <input
-                                    type="text"
-                                    value={settings.sfTtsVoice}
-                                    onChange={(e) => handleChange('sfTtsVoice', e.target.value)}
-                                    placeholder="输入音色 ID (例如: zh, alex)"
-                                    className="w-full px-4 py-2.5 bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 text-gray-800"
-                                />
-                            )}
-                        </div>
+                        <p className="text-xs text-blue-600">
+                            提示: 音色选择已移至首页“文章朗读”下方。
+                        </p>
                     </div>
                 )}
 
@@ -170,19 +133,9 @@ export const SettingsView: React.FC<Props> = ({ settings, onSave }) => {
                                 className="w-full px-4 py-2.5 bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 text-gray-800"
                             />
                         </div>
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-2">Voice Name (音色名)</label>
-                            <input
-                                type="text"
-                                value={settings.azureVoice}
-                                onChange={(e) => handleChange('azureVoice', e.target.value)}
-                                placeholder="例如: en-US-AvaMultilingualNeural"
-                                className="w-full px-4 py-2.5 bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 text-gray-800"
-                            />
-                            <p className="text-xs text-gray-500 mt-2">
-                                可在 Azure 控制台查看支持的 Neural Voice 名称。
-                            </p>
-                        </div>
+                        <p className="text-xs text-blue-600">
+                            提示: 音色选择已移至首页“文章朗读”下方。
+                        </p>
                     </div>
                 )}
 
@@ -192,28 +145,6 @@ export const SettingsView: React.FC<Props> = ({ settings, onSave }) => {
                         使用浏览器内置的语音引擎（Google/Microsoft/Apple），无需额外配置 API。
                     </div>
                 )}
-
-                {/* Speed Slider (Common) */}
-                <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">跟读语速 ({settings.ttsSpeed}x)</label>
-                    <div className="relative pt-1 max-w-sm">
-                        <input 
-                            type="range" 
-                            min="0.5" 
-                            max="1.5" 
-                            step="0.05" 
-                            value={settings.ttsSpeed}
-                            onChange={(e) => handleChange('ttsSpeed', parseFloat(e.target.value))}
-                            className="w-full accent-blue-600 h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer" 
-                        />
-                        <div className="relative h-5 mt-2 text-xs text-gray-400 font-medium select-none w-full">
-                            <span className="absolute left-0">慢 (0.5x)</span>
-                            <span className="absolute left-[33%] -translate-x-1/2">0.75x</span>
-                            <span className="absolute left-[66%] -translate-x-1/2">正常 (1.0x)</span>
-                            <span className="absolute right-0">1.5x</span>
-                        </div>
-                    </div>
-                </div>
             </div>
         </div>
       </div>

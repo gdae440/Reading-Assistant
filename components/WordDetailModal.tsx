@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { LookupResult } from '../types';
 
@@ -48,10 +49,12 @@ export const WordDetailModal: React.FC<Props> = ({ data, isLoading, onClose, pos
               <span className="text-gray-800 leading-snug">{data.cn}</span>
             </div>
             
-            <div className="flex gap-2">
-              <span className="font-semibold text-gray-400 min-w-[24px]">俄</span>
-              <span className="text-gray-800 leading-snug">{data.ru}</span>
-            </div>
+            {data.ru && (
+              <div className="flex gap-2">
+                <span className="font-semibold text-gray-400 min-w-[24px]">俄</span>
+                <span className="text-gray-800 leading-snug">{data.ru}</span>
+              </div>
+            )}
           </div>
 
           {data.example && (
