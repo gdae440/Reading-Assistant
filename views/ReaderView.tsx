@@ -624,7 +624,7 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
                     }`}
                 >
                     {isTranslating ? '生成中...' : (
-                        /[\u4e00-\u9fa5]/.test(inputText) ? '✨ 生成俄语回复' : '全文翻译'
+                        /[\u4e00-\u9fa5]/.test(inputText) ? '✨ 俄语回复' : '全文翻译'
                     )}
                 </button>
             </div>
