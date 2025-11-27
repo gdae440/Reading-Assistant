@@ -1,4 +1,5 @@
-import { LookupResult } from "../types";
+
+import { LookupResult, AnalysisResult } from "../types";
 
 const BASE_URL = "https://api.siliconflow.cn/v1";
 
@@ -63,7 +64,7 @@ export class SiliconFlowService {
         // English Strategy: IPA + CN + RU (Dual translation)
         prompt += `
         - "word": 原词 (纠正大小写)
-        - "ipa": DJ 或 KK 音标
+        - "ipa": DJ 音标 (英式)
         - "cn": 中文简洁释义
         - "ru": 俄语简洁释义
         - "reading": null
@@ -269,6 +270,47 @@ export class SiliconFlowService {
     } catch (error) {
       console.error("Reply Generation Error:", error);
       throw error;
+    }
+  }
+
+  /**
+   * Analyzes text to extract collocations and vocabulary.
+   */
+  async analyzeText(text: string, model: string): Promise<AnalysisResult> {
+    const prompt = `
+    Analyze the following text. 
+    1. Extract 5-10 useful Collocations/Phrases (chunks).
+    2. Extract 5-10 Core Vocabulary words (B2/C1 level or key terms).
+    
+    Return a strictly valid JSON object with this structure:
+    {
+      "collocations": [{"text": "original phrase", "cn": "chinese meaning"}],
+      "vocabulary": [{"text": "word", "cn": "chinese meaning"}]
+    }
+
+    Text to analyze:
+    ${text.slice(0, 2000)}
+    `;
+
+    try {
+      const response = await fetch(`${BASE_URL}/chat/completions`, {
+        method: "POST",
+        headers: this.getHeaders(),
+        body: JSON.stringify({
+          model: model,
+          messages: [{ role: "user", content: prompt }],
+          response_format: { type: "json_object" },
+          temperature: 0.1
+        })
+      });
+
+      if (!response.ok) throw new Error("Analysis failed");
+      const data = await response.json();
+      const content = data.choices[0].message.content;
+      return JSON.parse(content);
+    } catch (error) {
+      console.error("Analysis Error:", error);
+      return { collocations: [], vocabulary: [] };
     }
   }
 }

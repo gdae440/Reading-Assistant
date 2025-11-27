@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { AppSettings, WordEntry, HistoryEntry, LookupResult } from '../types';
+import { AppSettings, WordEntry, HistoryEntry, LookupResult, AnalysisResult } from '../types';
 import { SiliconFlowService } from '../services/siliconFlow';
 import { AzureTTSService, AZURE_VOICES } from '../services/azureTTS';
 import { GoogleFreeTTS } from '../services/googleTTS';
@@ -15,30 +15,30 @@ const SF_VOICES = [
     { label: "Zhe (男 - 中文)", value: "FunAudioLLM/CosyVoice2-0.5B:zhe" },
 ];
 
-// Ideal voices whitelist for Apple devices
-const IDEAL_VOICES: Record<string, Array<{name: string, label: string}>> = {
+// Ideal voices whitelist for Apple devices with Lang Codes
+const IDEAL_VOICES: Record<string, Array<{name: string, label: string, langCode: string}>> = {
     'en': [
-        { name: 'Daniel', label: '🇬🇧 Daniel (英音 - 推荐)' },
-        { name: 'Jamie', label: '🇬🇧 Jamie (英音 - 高音质)' },
-        { name: 'Serena', label: '🇬🇧 Serena (英音 - 高音质)' },
-        { name: 'Stephanie', label: '🇬🇧 Stephanie (英音 - 优化)' },
-        { name: 'Ava', label: '🇺🇸 Ava (美音 - 高音质)' },
-        { name: 'Evan', label: '🇺🇸 Evan (美音 - 优化)' },
-        { name: 'Zoe', label: '🇺🇸 Zoe (美音 - 高音质)' },
-        { name: 'Joelle', label: '🇺🇸 Joelle (美音 - 优化)' },
+        { name: 'Daniel', label: '🇬🇧 Daniel (英音 - 推荐)', langCode: 'en-GB' },
+        { name: 'Jamie', label: '🇬🇧 Jamie (英音 - 高音质)', langCode: 'en-GB' },
+        { name: 'Serena', label: '🇬🇧 Serena (英音 - 高音质)', langCode: 'en-GB' },
+        { name: 'Stephanie', label: '🇬🇧 Stephanie (英音 - 优化)', langCode: 'en-GB' },
+        { name: 'Ava', label: '🇺🇸 Ava (美音 - 高音质)', langCode: 'en-US' },
+        { name: 'Evan', label: '🇺🇸 Evan (美音 - 优化)', langCode: 'en-US' },
+        { name: 'Zoe', label: '🇺🇸 Zoe (美音 - 高音质)', langCode: 'en-US' },
+        { name: 'Joelle', label: '🇺🇸 Joelle (美音 - 优化)', langCode: 'en-US' },
     ],
     'zh': [
-        { name: 'Yue', label: '🇨🇳 Yue (高音质)' },
-        { name: 'Yun', label: '🇨🇳 Yun (高音质)' },
-        { name: 'Ting-Ting', label: '🇨🇳 Ting-Ting (中文 - 优化)' },
+        { name: 'Yue', label: '🇨🇳 Yue (高音质)', langCode: 'zh-CN' },
+        { name: 'Yun', label: '🇨🇳 Yun (高音质)', langCode: 'zh-CN' },
+        { name: 'Ting-Ting', label: '🇨🇳 Ting-Ting (中文 - 优化)', langCode: 'zh-CN' },
     ],
     'ja': [
-        { name: 'Kyoko', label: '🇯🇵 Kyoko (优化)' },
-        { name: 'Hattori', label: '🇯🇵 Hattori (优化)' },
+        { name: 'Kyoko', label: '🇯🇵 Kyoko (优化)', langCode: 'ja-JP' },
+        { name: 'Hattori', label: '🇯🇵 Hattori (优化)', langCode: 'ja-JP' },
     ],
     'ru': [
-        { name: 'Milena', label: '🇷🇺 Milena (优化)' },
-        { name: 'Yuri', label: '🇷🇺 Yuri (优化)' },
+        { name: 'Milena', label: '🇷🇺 Milena (优化)', langCode: 'ru-RU' },
+        { name: 'Yuri', label: '🇷🇺 Yuri (优化)', langCode: 'ru-RU' },
     ]
 };
 
@@ -55,6 +55,53 @@ const useBrowserVoices = () => {
     return voices;
 };
 
+// Image Compression Helper
+const compressImage = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.readAsDataURL(file);
+        reader.onload = (event) => {
+            const img = new Image();
+            img.src = event.target?.result as string;
+            img.onload = () => {
+                const canvas = document.createElement('canvas');
+                const MAX_WIDTH = 1024;
+                const MAX_HEIGHT = 1024;
+                let width = img.width;
+                let height = img.height;
+
+                if (width > height) {
+                    if (width > MAX_WIDTH) {
+                        height *= MAX_WIDTH / width;
+                        width = MAX_WIDTH;
+                    }
+                } else {
+                    if (height > MAX_HEIGHT) {
+                        width *= MAX_HEIGHT / height;
+                        height = MAX_HEIGHT;
+                    }
+                }
+
+                canvas.width = width;
+                canvas.height = height;
+                const ctx = canvas.getContext('2d');
+                ctx?.drawImage(img, 0, 0, width, height);
+                
+                // Compress to JPEG with 0.7 quality
+                const compressedBase64 = canvas.toDataURL('image/jpeg', 0.7);
+                resolve(compressedBase64);
+            };
+            img.onerror = (err) => reject(err);
+        };
+        reader.onerror = (err) => reject(err);
+    });
+};
+
+// Helper to split text into sentences
+const splitTextIntoSentences = (text: string): string[] => {
+    return text.match(/[^.!?。！？\n\r]+[.!?。！？\n\r]*|[\n\r]+/g) || [text];
+};
+
 interface Props {
   settings: AppSettings;
   onAddToVocab: (entry: WordEntry) => void;
@@ -64,16 +111,19 @@ interface Props {
 }
 
 export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVocabEntry, onSettingsChange, onAddToHistory }) => {
-  // Persistence for text
+  // Persistence
   const [inputText, setInputText] = useLocalStorage("reader_text", "");
   const [translationResult, setTranslationResult] = useLocalStorage<{text: string, type: 'translation' | 'reply'} | null>("reader_translation_result", null);
+  const [analysisResult, setAnalysisResult] = useLocalStorage<AnalysisResult | null>("reader_analysis_result", null);
   
   const [isReaderMode, setIsReaderMode] = useState(false);
+  const [isBlindMode, setIsBlindMode] = useState(false);
   const [lookupData, setLookupData] = useState<LookupResult | null>(null);
   const [modalPosition, setModalPosition] = useState<{ x: number, y: number } | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [ttsStatus, setTtsStatus] = useState<'idle' | 'loading' | 'playing'>('idle');
   const [isTranslating, setIsTranslating] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [ocrLoading, setOcrLoading] = useState(false);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [showIosGuide, setShowIosGuide] = useState(false);
@@ -92,6 +142,7 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
   // Audio Cache (LRU - Max 10)
   const audioCache = useRef<Map<string, string>>(new Map());
   const isFetchingAudio = useRef(false);
+  const isStoppedRef = useRef(false); // To break the shadowing loop
   const isScrolling = useRef(false);
   const lastSelectionRef = useRef<string>("");
 
@@ -102,6 +153,7 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
   // Clean up Object URLs
   useEffect(() => {
     return () => {
+      stopTTS();
       if (audioUrl) URL.revokeObjectURL(audioUrl);
       for (const url of audioCache.current.values()) {
         URL.revokeObjectURL(url);
@@ -113,11 +165,9 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
   // Detect Language
   const detectedLang = useMemo(() => {
     const textSample = inputText.slice(0, 300);
-    // Prioritize Kana (Japanese)
     if (/[\u3040-\u30ff\u3400-\u4dbf]/.test(textSample)) return 'ja';
-    // Then Chinese (Hanzi without Kana)
-    if (/[\u4e00-\u9fa5]/.test(textSample)) return 'zh';
     if (/[а-яА-ЯЁё]/.test(textSample)) return 'ru';
+    if (/[\u4e00-\u9fa5]/.test(textSample)) return 'zh';
     return 'en';
   }, [inputText]);
 
@@ -125,16 +175,13 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
   const uiVoices = useMemo(() => {
     if (settings.ttsProvider !== 'browser') return [];
 
-    // Filter logic based on detected language
     let langKey = 'en';
     if (detectedLang === 'zh') langKey = 'zh';
     else if (detectedLang === 'ja') langKey = 'ja';
     else if (detectedLang === 'ru') langKey = 'ru';
 
-    // 1. Android Strategy: Filter current lang + High Quality keywords
     if (isAndroid) {
         const langVoices = browserVoices.filter(v => v.lang.startsWith(langKey));
-        // Sort: Network/Online first
         return langVoices.sort((a, b) => {
             const aHQ = a.name.includes('Network') || a.name.includes('Online') || a.name.includes('Google');
             const bHQ = b.name.includes('Network') || b.name.includes('Online') || b.name.includes('Google');
@@ -145,22 +192,18 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
         }));
     }
 
-    // 2. Apple/Desktop Strategy: Strict Whitelist
     const ideals = IDEAL_VOICES[langKey] || [];
     const result: Array<{value: string, label: string, disabled?: boolean}> = [];
 
-    // Match ideals
     ideals.forEach(ideal => {
         const found = browserVoices.find(v => v.name.includes(ideal.name));
         if (found) {
             result.push({ value: found.voiceURI, label: ideal.label });
         } else {
-            // Missing ideal voice -> Show as gray option to trigger guide
             result.push({ value: `missing:${ideal.name}`, label: `${ideal.label} (需下载)`, disabled: false });
         }
     });
 
-    // If generic language (e.g. French) not in whitelist, pick top 2 Premium
     if (ideals.length === 0) {
          const matches = browserVoices.filter(v => v.lang.startsWith(langKey));
          const premiums = matches.filter(v => v.name.includes('Premium') || v.name.includes('Enhanced'));
@@ -168,7 +211,6 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
              result.push({ value: v.voiceURI, label: v.name });
          });
     }
-
     return result;
   }, [browserVoices, detectedLang, isAndroid, settings.ttsProvider]);
 
@@ -194,41 +236,24 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
     if (!settings.apiKey) { alert("请先在设置中配置 SiliconFlow API Key"); return; }
 
     setOcrLoading(true);
-    const reader = new FileReader();
-    reader.onload = async () => {
-        try {
-            const base64 = reader.result as string;
-            const text = await sfService.ocrImage(base64, settings.visionModel);
-            setInputText(prev => prev + (prev ? "\n\n" : "") + text);
-        } catch (err) {
-            alert("OCR 识别失败");
-        } finally {
-            setOcrLoading(false);
-            if (fileInputRef.current) fileInputRef.current.value = "";
-        }
-    };
-    reader.readAsDataURL(file);
-  };
-
-  // Selection handler for lookup (Deduped)
-  const handleSelection = async (e: React.MouseEvent | React.TouchEvent) => {
-    if (isScrolling.current) {
-        isScrolling.current = false;
-        return;
+    try {
+        const base64 = await compressImage(file);
+        const text = await sfService.ocrImage(base64, settings.visionModel);
+        setInputText(prev => prev + (prev ? "\n\n" : "") + text);
+    } catch (err) {
+        alert("OCR 识别失败，请检查图片或网络");
+        console.error(err);
+    } finally {
+        setOcrLoading(false);
+        if (fileInputRef.current) fileInputRef.current.value = "";
     }
   };
 
-  const handleWordClick = async (e: React.MouseEvent<HTMLSpanElement>, word: string) => {
-    e.stopPropagation();
-    if (!settings.apiKey) { alert("请先配置 API Key"); return; }
+  const performLookup = async (text: string, x: number, y: number) => {
+     if (!settings.apiKey) { alert("请先配置 API Key"); return; }
     
-    const cleanWord = word.replace(/^[^\w\u0400-\u04FF\u4e00-\u9fa5]+|[^\w\u0400-\u04FF\u4e00-\u9fa5]+$/g, '');
+    const cleanWord = text.replace(/^[^\w\u0400-\u04FF\u4e00-\u9fa5]+|[^\w\u0400-\u04FF\u4e00-\u9fa5]+$/g, '');
     if (!cleanWord || cleanWord.length > 20) return;
-
-    const rect = (e.target as HTMLElement).getBoundingClientRect();
-    let x = rect.left + window.scrollX;
-    let y = rect.bottom + window.scrollY + 10;
-    if (x + 320 > window.innerWidth) x = window.innerWidth - 340;
 
     setModalPosition({ x, y });
     setLookupData({ word: cleanWord, ipa: '', cn: '查询中...', ru: '' });
@@ -264,6 +289,15 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
     }
   };
 
+  const handleWordClick = async (e: React.MouseEvent<HTMLSpanElement>, word: string) => {
+    e.stopPropagation();
+    const rect = (e.target as HTMLElement).getBoundingClientRect();
+    let x = rect.left + window.scrollX;
+    let y = rect.bottom + window.scrollY + 10;
+    if (x + 320 > window.innerWidth) x = window.innerWidth - 340;
+    performLookup(word, x, y);
+  };
+
   // Audio Cache Helpers
   const getAudioFromCache = (key: string) => audioCache.current.get(key);
   const saveAudioToCache = (key: string, url: string) => {
@@ -279,6 +313,7 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
   };
 
   const stopTTS = () => {
+    isStoppedRef.current = true;
     if (audioRef.current) {
         audioRef.current.pause();
         audioRef.current.currentTime = 0;
@@ -289,137 +324,155 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
     isFetchingAudio.current = false;
   };
 
-  const handleTTS = async () => {
-    if (!inputText.trim()) return;
+  const playOneSegment = async (text: string): Promise<void> => {
+     if (!text.trim()) return;
+
+     if (settings.ttsProvider === 'browser') {
+        return new Promise((resolve, reject) => {
+            const uttr = new SpeechSynthesisUtterance(text);
+            uttr.rate = settings.ttsSpeed;
+            
+            let targetLang = detectedLang === 'zh' ? 'zh-CN' : detectedLang === 'ja' ? 'ja-JP' : detectedLang === 'ru' ? 'ru-RU' : 'en-US';
     
-    // Determine text segment
-    let textToPlay = inputText;
-    if (playMode === 'select' || playMode === 'continue') {
-        const start = selRange.start;
-        const end = selRange.end > start ? selRange.end : inputText.length;
-        const segment = inputText.slice(start, end).trim();
-        // Fix bug: if cursor is at end, fallback to all
-        if (segment) textToPlay = segment;
-        else setPlayMode('all'); 
-    }
-
-    // Stop previous
-    stopTTS();
-
-    // Lock check
-    if (isFetchingAudio.current) return;
-
-    // Browser TTS
-    if (settings.ttsProvider === 'browser') {
-        setTtsStatus('playing');
-        const uttr = new SpeechSynthesisUtterance(textToPlay);
-        uttr.rate = settings.ttsSpeed;
-        
-        if (settings.browserVoice) {
-            const voice = browserVoices.find(v => v.voiceURI === settings.browserVoice);
-            if (voice) {
-                uttr.voice = voice;
-                uttr.lang = voice.lang; // Fix: Prioritize voice lang (e.g., en-GB)
+            if (settings.browserVoice) {
+                const cleanName = settings.browserVoice.replace('missing:', '');
+                const voice = browserVoices.find(v => v.voiceURI === settings.browserVoice || v.name.includes(cleanName));
+                if (voice) {
+                    uttr.voice = voice;
+                    uttr.lang = voice.lang;
+                } else {
+                    const ideal = Object.values(IDEAL_VOICES).flat().find(v => cleanName.includes(v.name));
+                    if (ideal) targetLang = ideal.langCode;
+                    uttr.lang = targetLang;
+                }
+            } else {
+                 uttr.lang = targetLang;
             }
-        } else {
-             // System Default: Fallback to detected lang
-            if (detectedLang === 'zh') uttr.lang = 'zh-CN';
-            else if (detectedLang === 'ja') uttr.lang = 'ja-JP';
-            else if (detectedLang === 'ru') uttr.lang = 'ru-RU';
-            else uttr.lang = 'en-US';
-        }
-
-        uttr.onend = () => setTtsStatus('idle');
-        uttr.onerror = () => setTtsStatus('idle');
-        window.speechSynthesis.speak(uttr);
-        return;
-    }
-
-    // Google TTS (Free)
-    if (settings.ttsProvider === 'google') {
-        setTtsStatus('playing');
+            
+            uttr.onend = () => resolve();
+            uttr.onerror = (e) => reject(e);
+            window.speechSynthesis.speak(uttr);
+        });
+     }
+     
+     if (settings.ttsProvider === 'google') {
         let lang = 'en';
         if (detectedLang === 'zh') lang = 'zh-CN';
         else if (detectedLang === 'ja') lang = 'ja';
         else if (detectedLang === 'ru') lang = 'ru';
         
-        await googleTTS.current.play(textToPlay, lang, 1.0, () => setTtsStatus('idle')); // Force 1.0 speed
-        return;
+        return new Promise((resolve) => {
+             googleTTS.current.play(text, lang, 1.0, () => resolve());
+        });
+     }
+     
+     // API TTS
+     const cacheKey = `${text}_${settings.ttsProvider}_${settings.sfTtsVoice}_${settings.azureVoice}_${settings.ttsSpeed}`;
+     let url = getAudioFromCache(cacheKey);
+
+     if (!url) {
+        if (isFetchingAudio.current) return;
+        isFetchingAudio.current = true;
+        try {
+            let audioData: ArrayBuffer;
+            const fetchPromise = (async () => {
+                 if (settings.ttsProvider === 'siliconflow') {
+                    if (!settings.apiKey) throw new Error("缺少 Key");
+                    return await sfService.generateSpeech(text, settings.sfTtsModel, settings.sfTtsVoice, settings.ttsSpeed);
+                } else {
+                    if (!settings.azureKey) throw new Error("缺少 Key");
+                    const azure = new AzureTTSService(settings.azureKey, settings.azureRegion);
+                    return await azure.generateSpeech(text, settings.azureVoice, settings.ttsSpeed);
+                }
+            })();
+            
+            const timeoutPromise = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("请求超时")), 15000));
+            audioData = await Promise.race([fetchPromise, timeoutPromise]);
+            
+            const blob = new Blob([audioData], { type: 'audio/mp3' });
+            url = URL.createObjectURL(blob);
+            saveAudioToCache(cacheKey, url);
+        } catch(err: any) {
+            isFetchingAudio.current = false;
+             if (err.message === "Azure_429") alert("请求过于频繁 (Azure 限制)，请稍后再试");
+             else alert(err.message || "TTS Error");
+             throw err;
+        } finally {
+            isFetchingAudio.current = false;
+        }
+     }
+     
+     if (url) {
+         setAudioUrl(url);
+         return new Promise((resolve, reject) => {
+             const audio = new Audio(url);
+             audioRef.current = audio;
+             audio.onended = () => resolve();
+             audio.onerror = () => reject();
+             audio.play().catch(reject);
+         });
+     }
+  };
+
+  const handleTTS = async () => {
+    if (!inputText.trim()) return;
+    
+    let textToPlay = inputText;
+    if (playMode === 'select' || playMode === 'continue') {
+        const start = selRange.start;
+        const end = selRange.end > start ? selRange.end : inputText.length;
+        const segment = inputText.slice(start, end).trim();
+        if (segment) textToPlay = segment;
+        else setPlayMode('all'); 
     }
 
-    // Cache Key
-    const cacheKey = `${textToPlay}_${settings.ttsProvider}_${settings.sfTtsVoice}_${settings.azureVoice}_${settings.ttsSpeed}`;
-    const cachedUrl = getAudioFromCache(cacheKey);
-    if (cachedUrl) {
-        setAudioUrl(cachedUrl);
-        const audio = new Audio(cachedUrl);
-        audioRef.current = audio;
-        audio.onended = () => setTtsStatus('idle');
-        audio.play();
+    stopTTS();
+    isStoppedRef.current = false;
+    setTtsStatus(settings.shadowingMode ? 'playing' : 'loading');
+
+    // REFACTORED SHADOWING MODE LOOP
+    if (settings.shadowingMode) {
         setTtsStatus('playing');
-        return;
-    }
-
-    // Fetch API
-    setTtsStatus('loading');
-    isFetchingAudio.current = true;
-
-    try {
-        let audioData: ArrayBuffer;
+        const sentences = splitTextIntoSentences(textToPlay);
         
-        // Timeout race
-        const fetchPromise = (async () => {
-             if (settings.ttsProvider === 'siliconflow') {
-                if (!settings.apiKey) throw new Error("缺少 Key");
-                return await sfService.generateSpeech(textToPlay, settings.sfTtsModel, settings.sfTtsVoice, settings.ttsSpeed);
-            } else {
-                if (!settings.azureKey) throw new Error("缺少 Key");
-                const azure = new AzureTTSService(settings.azureKey, settings.azureRegion);
-                return await azure.generateSpeech(textToPlay, settings.azureVoice, settings.ttsSpeed);
+        for (const sentence of sentences) {
+            if (isStoppedRef.current) break;
+            if (!sentence.trim()) continue;
+
+            try {
+                // 1. Play Sentence
+                await playOneSegment(sentence);
+                
+                if (isStoppedRef.current) break;
+
+                // 2. Pause for Shadowing
+                await new Promise(resolve => {
+                    setTimeout(resolve, settings.shadowingPause * 1000);
+                });
+
+            } catch (err) {
+                console.error("Playback error", err);
+                break;
             }
-        })();
-
-        const timeoutPromise = new Promise<never>((_, reject) => 
-            setTimeout(() => reject(new Error("请求超时，请检查网络")), 15000)
-        );
-
-        audioData = await Promise.race([fetchPromise, timeoutPromise]);
-
-        const blob = new Blob([audioData], { type: 'audio/mp3' });
-        const url = URL.createObjectURL(blob);
-        saveAudioToCache(cacheKey, url);
-        setAudioUrl(url);
-        
-        const audio = new Audio(url);
-        audioRef.current = audio;
-        audio.onended = () => setTtsStatus('idle');
-        audio.onerror = () => { alert("播放出错"); setTtsStatus('idle'); };
-        audio.play();
-        setTtsStatus('playing');
-    } catch (err: any) {
-        if (err.message === "Azure_429") {
-            alert("请求过于频繁 (Azure 限制)，请稍后再试");
-        } else {
-            alert(err.message || "TTS Error");
         }
         setTtsStatus('idle');
-    } finally {
-        isFetchingAudio.current = false;
+    } 
+    else {
+        try {
+            await playOneSegment(textToPlay);
+        } catch (e) {
+             // Handled internally
+        }
+        setTtsStatus('idle');
     }
   };
 
   const handleTranslateOrReply = async () => {
-    if (!inputText.trim()) {
-        alert("请先输入需要翻译的文章内容");
-        return;
-    }
-    if (!settings.apiKey) {
-        alert("请先在设置中配置 SiliconFlow API Key");
-        return;
-    }
+    if (!inputText.trim()) { alert("请先输入内容"); return; }
+    if (!settings.apiKey) { alert("请配置 API Key"); return; }
 
     setIsTranslating(true);
-    setTranslationResult(null); // Clear previous result to show loading state if needed or just reset
+    setTranslationResult(null);
     const hasChinese = /[\u4e00-\u9fa5]/.test(inputText);
     
     try {
@@ -433,15 +486,13 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
             result = await sfService.translateArticle(inputText, settings.llmModel);
         }
         
-        const entry: HistoryEntry = {
+        onAddToHistory({
             id: Date.now().toString(),
             original: inputText,
             translation: result,
             type: type,
             timestamp: Date.now()
-        };
-        
-        onAddToHistory(entry);
+        });
         setTranslationResult({ text: result, type });
     } catch (err) {
         alert("请求失败，请检查网络或 API Key");
@@ -450,7 +501,34 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
     }
   };
 
-  // Render Logic
+  const handleAnalyze = async () => {
+    if (!inputText.trim()) { alert("请先输入内容"); return; }
+    if (!settings.apiKey) { alert("请配置 API Key"); return; }
+
+    setIsAnalyzing(true);
+    setAnalysisResult(null);
+
+    try {
+        const result = await sfService.analyzeText(inputText, settings.llmModel);
+        setAnalysisResult(result);
+    } catch (err) {
+        alert("分析失败");
+    } finally {
+        setIsAnalyzing(false);
+    }
+  };
+
+  const addAnalysisItemToVocab = (item: {text: string, cn: string}) => {
+      onAddToVocab({
+          id: Date.now().toString(),
+          word: item.text,
+          meaningCn: item.cn,
+          meaningRu: '',
+          timestamp: Date.now()
+      });
+      alert(`已添加: ${item.text}`);
+  };
+
   const renderReaderContent = () => {
     if (!inputText) return <div className="text-gray-400 mt-10 text-center">在此粘贴文章，开始跟读...</div>;
     return inputText.split(/\n+/).map((para, pIdx) => (
@@ -475,8 +553,8 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
     if (val.startsWith('missing:')) {
         if (isAndroid) setShowAndroidGuide(true);
         else setShowIosGuide(true);
-        return;
     }
+    
     if (settings.ttsProvider === 'siliconflow') onSettingsChange({ ...settings, sfTtsVoice: val });
     else if (settings.ttsProvider === 'azure') onSettingsChange({ ...settings, azureVoice: val });
     else onSettingsChange({ ...settings, browserVoice: val });
@@ -486,19 +564,49 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
     <div className="flex flex-col min-h-[calc(100vh-4rem)] max-w-5xl mx-auto relative pb-20" onClick={() => setModalPosition(null)}>
         {/* Top Toolbar */}
         <div className="flex-none p-4 md:p-6 pb-2">
-            <div className="flex items-center justify-between bg-white dark:bg-[#1c1c1e] p-2 rounded-2xl shadow-sm border border-gray-100 dark:border-white/10">
+            <div className="flex items-center justify-between bg-white dark:bg-[#1c1c1e] p-2 rounded-2xl shadow-sm border border-gray-100 dark:border-white/10 overflow-x-auto scrollbar-hide">
                  <div className="flex items-center gap-2">
                     <button 
                         onClick={() => setIsReaderMode(!isReaderMode)}
-                        className={`px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-colors ${isReaderMode ? 'bg-blue-600 text-white' : 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300'}`}
+                        className={`px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-colors whitespace-nowrap ${isReaderMode ? 'bg-blue-600 text-white' : 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300'}`}
                     >
-                        {isReaderMode ? '编辑' : '阅读'}
+                        {isReaderMode ? '编辑' : '查词'}
                     </button>
+
+                    <button
+                        onClick={() => setIsBlindMode(!isBlindMode)}
+                        className={`p-2 rounded-xl flex-none transition-colors flex items-center gap-1.5 ${
+                            isBlindMode 
+                            ? 'bg-gray-800 dark:bg-gray-200 text-white dark:text-black' 
+                            : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'
+                        }`}
+                        title={isBlindMode ? "关闭盲听" : "开启盲听"}
+                    >
+                        {isBlindMode ? (
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"></path></svg>
+                        ) : (
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
+                        )}
+                        <span className="text-xs font-bold hidden md:inline">盲听</span>
+                    </button>
+                    
+                    <button
+                        onClick={handleAnalyze}
+                        disabled={isAnalyzing}
+                        className={`p-2 rounded-xl flex-none transition-colors flex items-center gap-1.5 ${
+                             isAnalyzing ? 'bg-gray-100 dark:bg-gray-800 text-gray-400' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'
+                        }`}
+                    >
+                         {isAnalyzing ? <svg className="animate-spin w-5 h-5" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> : 
+                         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>}
+                         <span className="text-xs font-bold hidden md:inline">AI 分析</span>
+                    </button>
+                    
                     <div className="w-px h-6 bg-gray-200 dark:bg-gray-700 mx-1"></div>
                     <button 
                         onClick={() => fileInputRef.current?.click()}
                         disabled={ocrLoading}
-                        className="p-2 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg"
+                        className="p-2 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg flex-none"
                     >
                         {ocrLoading ? <svg className="animate-spin w-5 h-5" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> : 
                         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"></path><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>}
@@ -509,7 +617,7 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
                  <button 
                     onClick={handleTranslateOrReply}
                     disabled={isTranslating}
-                    className={`px-4 py-2 text-sm font-bold rounded-xl transition-all shadow-sm ${
+                    className={`ml-2 px-4 py-2 text-sm font-bold rounded-xl transition-all shadow-sm whitespace-nowrap ${
                         /[\u4e00-\u9fa5]/.test(inputText) 
                         ? 'bg-purple-50 dark:bg-purple-900/20 text-purple-600 dark:text-purple-300 border border-purple-100 dark:border-purple-500/20' 
                         : 'bg-gray-50 dark:bg-gray-800 text-gray-700 dark:text-gray-300'
@@ -524,34 +632,81 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
 
         {/* Main Content Area */}
         <div className="flex-none mx-4 md:mx-6 mb-2 bg-white dark:bg-[#1c1c1e] rounded-3xl shadow-[0_2px_15px_rgb(0,0,0,0.02)] border border-gray-100 dark:border-white/10 overflow-hidden relative min-h-[300px]">
-            {isReaderMode ? (
-                <div 
-                    className="absolute inset-0 overflow-y-auto p-6 md:p-8 scrollbar-hide text-lg md:text-xl"
-                    onTouchStart={() => isScrolling.current = false}
-                    onTouchMove={() => isScrolling.current = true}
-                >
-                    {renderReaderContent()}
-                </div>
-            ) : (
-                <textarea
-                    ref={textareaRef}
-                    value={inputText}
-                    onChange={(e) => setInputText(e.target.value)}
-                    onSelect={updatePlayMode}
-                    onClick={updatePlayMode}
-                    onKeyUp={updatePlayMode}
-                    onTouchStart={() => isScrolling.current = false}
-                    onTouchMove={() => isScrolling.current = true}
-                    placeholder="在此输入或粘贴文章..."
-                    className="w-full h-full min-h-[300px] p-6 md:p-8 resize-none focus:outline-none bg-transparent text-lg md:text-xl text-gray-800 dark:text-gray-200 placeholder-gray-300 dark:placeholder-gray-700"
-                />
-            )}
+            <div className={`w-full h-full transition-all duration-500 ${isBlindMode ? 'blur-md opacity-60' : ''}`}>
+                {isReaderMode ? (
+                    <div 
+                        className="absolute inset-0 overflow-y-auto p-6 md:p-8 scrollbar-hide text-lg md:text-xl"
+                        onTouchStart={() => isScrolling.current = false}
+                        onTouchMove={() => isScrolling.current = true}
+                    >
+                        {renderReaderContent()}
+                    </div>
+                ) : (
+                    <textarea
+                        ref={textareaRef}
+                        value={inputText}
+                        onChange={(e) => setInputText(e.target.value)}
+                        onSelect={updatePlayMode}
+                        onClick={updatePlayMode}
+                        onKeyUp={updatePlayMode}
+                        onTouchStart={() => isScrolling.current = false}
+                        onTouchMove={() => isScrolling.current = true}
+                        placeholder="在此输入或粘贴文章..."
+                        className="w-full h-full min-h-[300px] p-6 md:p-8 resize-none focus:outline-none bg-transparent text-lg md:text-xl text-gray-800 dark:text-gray-200 placeholder-gray-300 dark:placeholder-gray-700"
+                    />
+                )}
+            </div>
+            {/* Modal is strictly NOT blurred */}
             <WordDetailModal data={lookupData} isLoading={isLoading} onClose={() => setModalPosition(null)} position={modalPosition} />
         </div>
 
+        {/* AI Analysis Result */}
+        {analysisResult && (
+             <div className="flex-none mx-4 md:mx-6 mb-4 p-6 bg-blue-50/50 dark:bg-blue-900/10 rounded-3xl shadow-sm border border-blue-100 dark:border-blue-500/20 relative animate-in fade-in slide-in-from-top-2">
+                 <button onClick={() => setAnalysisResult(null)} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600">
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                 </button>
+                 <h3 className="text-sm font-bold text-blue-800 dark:text-blue-300 uppercase tracking-wide mb-4">AI 智能分析</h3>
+                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                     <div>
+                         <h4 className="text-xs font-bold text-gray-500 mb-2">常用搭配 / 词块</h4>
+                         <div className="space-y-2">
+                             {analysisResult.collocations.map((item, idx) => (
+                                 <div key={idx} className="flex items-center justify-between bg-white dark:bg-black/20 p-2 rounded-lg border border-blue-100 dark:border-white/5">
+                                     <div>
+                                         <div className="text-sm font-semibold text-gray-800 dark:text-gray-200">{item.text}</div>
+                                         <div className="text-xs text-gray-500">{item.cn}</div>
+                                     </div>
+                                     <button onClick={() => addAnalysisItemToVocab(item)} className="p-1.5 text-blue-500 hover:bg-blue-50 rounded-full">
+                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"></path></svg>
+                                     </button>
+                                 </div>
+                             ))}
+                         </div>
+                     </div>
+                     <div>
+                         <h4 className="text-xs font-bold text-gray-500 mb-2">核心词汇 (B2/C1)</h4>
+                         <div className="space-y-2">
+                             {analysisResult.vocabulary.map((item, idx) => (
+                                 <div key={idx} className="flex items-center justify-between bg-white dark:bg-black/20 p-2 rounded-lg border border-purple-100 dark:border-white/5">
+                                     <div>
+                                         <div className="text-sm font-semibold text-gray-800 dark:text-gray-200">{item.text}</div>
+                                         <div className="text-xs text-gray-500">{item.cn}</div>
+                                     </div>
+                                     <button onClick={() => addAnalysisItemToVocab(item)} className="p-1.5 text-purple-500 hover:bg-purple-50 rounded-full">
+                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"></path></svg>
+                                     </button>
+                                 </div>
+                             ))}
+                         </div>
+                     </div>
+                 </div>
+             </div>
+        )}
+
         {/* Translation/Reply Result Section */}
         {translationResult && (
-            <div className="flex-none mx-4 md:mx-6 mb-6 mt-4 p-6 bg-white dark:bg-[#1c1c1e] rounded-3xl shadow-sm border border-purple-100 dark:border-purple-500/20 relative animate-in slide-in-from-top-2 fade-in duration-300">
+            <div className="flex-none mx-4 md:mx-6 mb-6 p-6 bg-white dark:bg-[#1c1c1e] rounded-3xl shadow-sm border border-purple-100 dark:border-purple-500/20 relative animate-in slide-in-from-top-2 fade-in duration-300">
                 <button 
                     onClick={() => setTranslationResult(null)}
                     className="absolute top-4 right-4 p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
@@ -607,8 +762,15 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
 
                 {/* Status & Mode Text */}
                 <div className="flex-1 min-w-0">
-                    <div className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wide mb-0.5">
-                        {playMode === 'select' ? '播放选中' : playMode === 'continue' ? '从光标处播放' : '全文跟读'}
+                    <div className="flex items-center gap-2 mb-0.5">
+                        <span className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wide">
+                            {playMode === 'select' ? '播放选中' : playMode === 'continue' ? '从光标处播放' : '全文跟读'}
+                        </span>
+                        {settings.shadowingMode && (
+                             <span className="text-[10px] font-bold bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300 px-1.5 py-0.5 rounded">
+                                跟读中
+                             </span>
+                        )}
                     </div>
                     
                     {/* Voice Selector */}
@@ -629,7 +791,7 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
                                     {settings.ttsProvider === 'siliconflow' && SF_VOICES.map(v => <option key={v.value} value={v.value}>{v.label}</option>)}
                                     {settings.ttsProvider === 'azure' && AZURE_VOICES.map(v => <option key={v.value} value={v.value}>{v.label}</option>)}
                                     {settings.ttsProvider === 'browser' && uiVoices.map(v => (
-                                        <option key={v.value} value={v.value} disabled={v.value.startsWith('missing:')} className={v.value.startsWith('missing:') ? 'text-gray-400' : ''}>
+                                        <option key={v.value} value={v.value} disabled={v.disabled} className={v.value.startsWith('missing:') ? 'text-gray-400' : ''}>
                                             {v.label}
                                         </option>
                                     ))}

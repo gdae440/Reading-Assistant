@@ -11,8 +11,12 @@ const DEFAULT_SETTINGS: AppSettings = {
   llmModel: 'deepseek-ai/DeepSeek-V3.2-Exp',
   visionModel: 'Qwen/Qwen3-VL-32B-Instruct',
   
-  ttsProvider: 'browser', // Default to Local Browser TTS
+  ttsProvider: 'google', // Default to Google Free TTS
   ttsSpeed: 1.0,
+  
+  // Shadowing Defaults
+  shadowingMode: false,
+  shadowingPause: 2.0,
 
   // SiliconFlow Defaults
   sfTtsModel: 'FunAudioLLM/CosyVoice2-0.5B',

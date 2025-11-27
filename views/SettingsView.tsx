@@ -91,6 +91,41 @@ export const SettingsView: React.FC<Props> = ({ settings, onSave }) => {
                    </div>
                 </div>
 
+                {/* Shadowing Config */}
+                <div className="p-4 bg-purple-50/50 dark:bg-purple-900/20 rounded-xl border border-purple-100/50 dark:border-purple-500/20">
+                    <div className="flex items-center justify-between mb-4">
+                         <div>
+                            <div className="font-semibold text-gray-900 dark:text-white">跟读模式 (Shadowing)</div>
+                            <div className="text-xs text-gray-500 dark:text-gray-400">开启后将按句朗读，并自动留出跟读时间。</div>
+                         </div>
+                         <button 
+                            onClick={() => handleChange('shadowingMode', !settings.shadowingMode)}
+                            className={`w-12 h-7 rounded-full p-1 transition-colors duration-300 ease-in-out ios-switch ${
+                                settings.shadowingMode ? 'bg-green-500' : 'bg-gray-300 dark:bg-gray-600'
+                            }`}
+                         >
+                             <div className={`w-5 h-5 bg-white rounded-full shadow-sm ios-switch-knob transform transition-transform duration-300 ${
+                                 settings.shadowingMode ? 'translate-x-5' : 'translate-x-0'
+                             }`}></div>
+                         </button>
+                    </div>
+
+                    {settings.shadowingMode && (
+                        <div className="animate-in slide-in-from-top-2 fade-in">
+                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 flex justify-between">
+                                <span>跟读间隔</span>
+                                <span className="font-mono">{settings.shadowingPause} 秒</span>
+                            </label>
+                            <input 
+                                type="range" min="0.5" max="5.0" step="0.5"
+                                value={settings.shadowingPause}
+                                onChange={(e) => handleChange('shadowingPause', parseFloat(e.target.value))}
+                                className="w-full h-1 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer accent-purple-600"
+                            />
+                        </div>
+                    )}
+                </div>
+
                 {/* SiliconFlow Config */}
                 {settings.ttsProvider === 'siliconflow' && (
                     <div className="space-y-4 p-4 bg-blue-50/50 dark:bg-blue-900/20 rounded-xl border border-blue-100/50 dark:border-blue-500/20 animate-in fade-in zoom-in-95">

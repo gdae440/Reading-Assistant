@@ -28,6 +28,10 @@ export interface AppSettings {
   // TTS General
   ttsProvider: TTSProvider;
   ttsSpeed: number;
+  
+  // Shadowing Mode
+  shadowingMode: boolean;
+  shadowingPause: number; // Seconds
 
   // SiliconFlow TTS Specific
   sfTtsModel: string;
@@ -56,4 +60,14 @@ export interface LookupResult {
   ru: string;
   // example is now optional as it is loaded async
   example?: string; 
+}
+
+export interface AnalysisItem {
+  text: string;
+  cn: string;
+}
+
+export interface AnalysisResult {
+  collocations: AnalysisItem[];
+  vocabulary: AnalysisItem[];
 }
