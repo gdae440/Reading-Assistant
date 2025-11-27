@@ -2,11 +2,17 @@
 export class GoogleFreeTTS {
   private isPlaying = false;
   private audioQueue: string[] = [];
+  // Use a static instance or ensure the class manages one instance effectively. 
+  // Since the service is instantiated via useRef in ReaderView, it effectively acts as a singleton per view.
+  // We keep it as an instance property but ensure we manage it carefully.
   private audioElement: HTMLAudioElement;
   private onComplete: () => void = () => {};
 
   constructor() {
     this.audioElement = new Audio();
+    // iOS Safari requires the audio element to be configured in a user interaction.
+    // We set autoplay to false initially.
+    this.audioElement.autoplay = false;
   }
 
   /**
@@ -14,8 +20,6 @@ export class GoogleFreeTTS {
    * to satisfy Google TTS API limits.
    */
   private chunkText(text: string): string[] {
-    // Split by sentence delimiters (period, question mark, exclamation, etc.)
-    // Keep the delimiter with the chunk
     const sentences = text.match(/[^.!?。！？\n]+[.!?。！？\n]*/g) || [text];
     const chunks: string[] = [];
     
@@ -39,10 +43,8 @@ export class GoogleFreeTTS {
     this.isPlaying = true;
     this.onComplete = onComplete;
     
-    // Chunk the text
     this.audioQueue = this.chunkText(text);
     
-    // Map 'auto' or complex lang codes to Google TTS supported codes
     let googleLang = lang;
     if (lang === 'zh') googleLang = 'zh-CN';
     if (lang === 'ja') googleLang = 'ja';
@@ -62,22 +64,24 @@ export class GoogleFreeTTS {
     const text = this.audioQueue.shift();
     if (!text) return;
 
-    // Google Translate TTS API (Unofficial but widely used)
     const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(text)}&tl=${lang}&client=tw-ob`;
 
     return new Promise<void>((resolve) => {
-        // Reuse the existing audio element to allow iOS playback
+        // Essential for iOS: Reuse the same audio element and just change src
         this.audioElement.src = url;
         this.audioElement.playbackRate = speed;
         
+        // Essential for iOS: Call load() to ensure the new source is ready
+        this.audioElement.load();
+
         this.audioElement.onended = () => {
             resolve();
+            // Recursive call is fine here as it's triggered by the previous audio ending
             this.playNextChunk(lang, speed);
         };
         
         this.audioElement.onerror = (e) => {
             console.error("Google TTS Playback Error", e);
-            // Skip to next chunk on error
             resolve();
             this.playNextChunk(lang, speed);
         };
@@ -95,6 +99,8 @@ export class GoogleFreeTTS {
     if (this.audioElement) {
         this.audioElement.pause();
         this.audioElement.currentTime = 0;
+        // Removing src can help reset the element state
+        this.audioElement.removeAttribute('src');
     }
   }
 }

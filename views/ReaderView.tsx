@@ -115,6 +115,7 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
   const [inputText, setInputText] = useLocalStorage("reader_text", "");
   const [translationResult, setTranslationResult] = useLocalStorage<{text: string, type: 'translation' | 'reply'} | null>("reader_translation_result", null);
   const [analysisResult, setAnalysisResult] = useLocalStorage<AnalysisResult | null>("reader_analysis_result", null);
+  const [addedAnalysisItems, setAddedAnalysisItems] = useState<Set<string>>(new Set());
   
   const [isReaderMode, setIsReaderMode] = useState(false);
   const [isBlindMode, setIsBlindMode] = useState(false);
@@ -167,6 +168,7 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
   // Detect Language
   const detectedLang = useMemo(() => {
     const textSample = inputText.slice(0, 300);
+    // Priority: Japanese -> Russian -> Chinese -> English
     if (/[\u3040-\u30ff\u3400-\u4dbf]/.test(textSample)) return 'ja';
     if (/[а-яА-ЯЁё]/.test(textSample)) return 'ru';
     if (/[\u4e00-\u9fa5]/.test(textSample)) return 'zh';
@@ -221,10 +223,14 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
     if (!textareaRef.current) return;
     const { selectionStart, selectionEnd, value } = textareaRef.current;
     
+    // Check content after cursor for meaningful characters
+    const textAfter = value.slice(selectionStart);
+    const hasMeaningfulContent = /[a-zA-Z\u00C0-\u00FF\u0400-\u04FF\u4e00-\u9fa5\u3040-\u30ff\u3400-\u4dbf]/.test(textAfter);
+
     if (selectionEnd > selectionStart) {
         setPlayMode('select');
         setSelRange({ start: selectionStart, end: selectionEnd });
-    } else if (selectionStart > 0 && selectionStart < value.length) {
+    } else if (selectionStart > 0 && selectionStart < value.length && hasMeaningfulContent) {
         setPlayMode('continue');
         setSelRange({ start: selectionStart, end: value.length });
     } else {
@@ -340,15 +346,22 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
             const uttr = new SpeechSynthesisUtterance(text);
             uttr.rate = settings.ttsSpeed;
             
+            // Re-fetch voices to ensure we have the latest list (fix for iOS Safari)
+            const freshVoices = window.speechSynthesis.getVoices();
+            
             let targetLang = detectedLang === 'zh' ? 'zh-CN' : detectedLang === 'ja' ? 'ja-JP' : detectedLang === 'ru' ? 'ru-RU' : 'en-US';
     
             if (settings.browserVoice) {
                 const cleanName = settings.browserVoice.replace('missing:', '');
-                const voice = browserVoices.find(v => v.voiceURI === settings.browserVoice || v.name.includes(cleanName));
+                // Try finding by URI first, then by name
+                const voice = freshVoices.find(v => v.voiceURI === settings.browserVoice) || 
+                              freshVoices.find(v => v.name.includes(cleanName));
+                
                 if (voice) {
                     uttr.voice = voice;
                     uttr.lang = voice.lang;
                 } else {
+                    // Fallback to searching ideal list to get correct lang code
                     const ideal = Object.values(IDEAL_VOICES).flat().find(v => cleanName.includes(v.name));
                     if (ideal) targetLang = ideal.langCode;
                     uttr.lang = targetLang;
@@ -370,6 +383,7 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
         else if (detectedLang === 'ru') lang = 'ru';
         
         return new Promise((resolve) => {
+             // Force speed 1.0 for Google Free TTS to prevent issues
              googleTTS.current.play(text, lang, 1.0, () => resolve());
         });
      }
@@ -430,13 +444,13 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
         const start = selRange.start;
         const end = selRange.end > start ? selRange.end : inputText.length;
         const segment = inputText.slice(start, end).trim();
-        // Check if segment is actually just whitespace (e.g. cursor at end)
-        // If so, fallback to ALL mode.
-        if (segment) {
+        
+        // Safeguard: Check if segment contains meaningful characters
+        if (segment && /[a-zA-Z\u00C0-\u00FF\u0400-\u04FF\u4e00-\u9fa5\u3040-\u30ff\u3400-\u4dbf]/.test(segment)) {
             textToPlay = segment;
         } else {
+            // Fallback to all if segment is just punctuation or empty
             setPlayMode('all'); 
-            // Fallback to full text immediately if segment is empty
             textToPlay = inputText; 
         }
     }
@@ -522,6 +536,7 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
 
     setIsAnalyzing(true);
     setAnalysisResult(null);
+    setAddedAnalysisItems(new Set()); // Reset added state
     setIsAnalysisCollapsed(false);
 
     try {
@@ -566,34 +581,17 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
           meaningRu: '',
           timestamp: Date.now()
       });
-      alert(`已添加: ${item.text}`);
+      // Update visual state instead of alert
+      setAddedAnalysisItems(prev => new Set(prev).add(item.text));
   };
 
   const renderReaderContent = () => {
     if (!inputText) return <div className="text-gray-400 mt-10 text-center">在此粘贴文章，开始跟读...</div>;
     
-    // Normalize text for matching
     const normalizedInput = inputText.replace(/\r\n/g, '\n');
     const sentences = analysisResult?.sentences || [];
 
-    // Helper to find sentence range
-    const findSentenceRange = (paragraph: string, sentence: string) => {
-        const pNorm = paragraph.replace(/\s+/g, ' ').trim();
-        const sNorm = sentence.replace(/\s+/g, ' ').trim();
-        const idx = pNorm.indexOf(sNorm);
-        if (idx !== -1) {
-             // Approximation: Find loose match in original string
-             // Ideally we need more robust fuzzy matching, but for now simple string inclusion check
-             // Note: highlighting exact span in raw text is hard if whitespace differs.
-             // We will try simple inclusion.
-             const start = paragraph.indexOf(sentence);
-             if (start !== -1) return { start, end: start + sentence.length };
-        }
-        return null;
-    };
-
     return normalizedInput.split(/\n+/).map((para, pIdx) => {
-        // Check if any key sentence is in this paragraph
         let hlRange = null;
         for (const s of sentences) {
              if (para.includes(s.text)) {
@@ -608,25 +606,6 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
                 {para.split(/(\s+|[.,!?;:()（）"。！？])/).map((chunk, cIdx) => {
                     if (!chunk.trim() || /^[.,!?;:()（）"。！？]+$/.test(chunk)) return <span key={cIdx}>{chunk}</span>;
                     
-                    // Simple highlighting if this chunk is part of a key sentence (loose check)
-                    let isHighlight = false;
-                    if (hlRange) {
-                        // This logic is simplified; accurate index tracking is complex with split
-                        // For now, if the chunk matches a key sentence text exactly, highlight it? No, chunks are small.
-                        // We check if the paragraph contains the key sentence, and wrap the whole sentence.
-                        // But here we are iterating chunks.
-                    }
-                    // REFACTOR: Instead of chunk mapping for highlighting, let's wrap the text
-                    // But we also need clickable words.
-                    // Hybrid approach: 
-                    // If matched, apply bg to the wrapper of those chunks? Hard.
-                    // Alternative: Apply highlight class to individual word spans if they are inside the range.
-                    // Since we don't track indices easily here, let's just highlight specific words if they are part of the key sentence?
-                    // Better: Highlight the whole paragraph if it *is* the sentence?
-                    // Let's rely on the user reading the Analysis panel for exact sentences, and here just click words.
-                    // Or: Just apply a background to the paragraph if it contains a key sentence?
-                    
-                    // Let's try checking inclusion in key sentences
                     const belongsToKeySentence = sentences.some(s => s.text.includes(chunk) && para.includes(s.text));
                     
                     return (
@@ -649,14 +628,16 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
   };
 
   const handleVoiceChange = (val: string) => {
+    // Allow selection even if missing, to trigger guide on next interaction or persist user wish
+    if (settings.ttsProvider === 'siliconflow') onSettingsChange({ ...settings, sfTtsVoice: val });
+    else if (settings.ttsProvider === 'azure') onSettingsChange({ ...settings, azureVoice: val });
+    else onSettingsChange({ ...settings, browserVoice: val });
+    
+    // Show guide immediately if selecting a missing voice
     if (val.startsWith('missing:')) {
         if (isAndroid) setShowAndroidGuide(true);
         else setShowIosGuide(true);
     }
-    
-    if (settings.ttsProvider === 'siliconflow') onSettingsChange({ ...settings, sfTtsVoice: val });
-    else if (settings.ttsProvider === 'azure') onSettingsChange({ ...settings, azureVoice: val });
-    else onSettingsChange({ ...settings, browserVoice: val });
   };
 
   return (
@@ -756,7 +737,6 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
                     />
                 )}
             </div>
-            {/* Modal is strictly NOT blurred */}
             <WordDetailModal data={lookupData} isLoading={isLoading} onClose={() => setModalPosition(null)} position={modalPosition} />
         </div>
 
@@ -785,7 +765,6 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
 
                  {!isAnalysisCollapsed && (
                      <div className="space-y-6">
-                         {/* Key Sentences Section */}
                          <div>
                              <h4 className="text-xs font-bold text-gray-500 mb-2">🎙️ 重点跟读 (Key Sentences)</h4>
                              <div className="space-y-3">
@@ -817,8 +796,16 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
                                                  <div className="text-sm font-semibold text-gray-800 dark:text-gray-200">{item.text}</div>
                                                  <div className="text-xs text-gray-500">{item.cn}</div>
                                              </div>
-                                             <button onClick={() => addAnalysisItemToVocab(item)} className="p-1.5 text-blue-500 hover:bg-blue-50 rounded-full">
-                                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"></path></svg>
+                                             <button 
+                                                onClick={() => addAnalysisItemToVocab(item)} 
+                                                disabled={addedAnalysisItems.has(item.text)}
+                                                className={`p-1.5 rounded-full ${addedAnalysisItems.has(item.text) ? 'bg-green-100 text-green-600' : 'text-blue-500 hover:bg-blue-50'}`}
+                                             >
+                                                {addedAnalysisItems.has(item.text) ? (
+                                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path></svg>
+                                                ) : (
+                                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"></path></svg>
+                                                )}
                                              </button>
                                          </div>
                                      ))}
@@ -833,8 +820,16 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
                                                  <div className="text-sm font-semibold text-gray-800 dark:text-gray-200">{item.text}</div>
                                                  <div className="text-xs text-gray-500">{item.cn}</div>
                                              </div>
-                                             <button onClick={() => addAnalysisItemToVocab(item)} className="p-1.5 text-purple-500 hover:bg-purple-50 rounded-full">
-                                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"></path></svg>
+                                             <button 
+                                                onClick={() => addAnalysisItemToVocab(item)} 
+                                                disabled={addedAnalysisItems.has(item.text)}
+                                                className={`p-1.5 rounded-full ${addedAnalysisItems.has(item.text) ? 'bg-green-100 text-green-600' : 'text-purple-500 hover:bg-purple-50'}`}
+                                             >
+                                                {addedAnalysisItems.has(item.text) ? (
+                                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path></svg>
+                                                ) : (
+                                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"></path></svg>
+                                                )}
                                              </button>
                                          </div>
                                      ))}
@@ -885,7 +880,6 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
         {/* Bottom Control Bar */}
         <div className="flex-none p-4 md:p-6 pt-2 pb-[calc(env(safe-area-inset-bottom)+1rem)]">
              <div className="bg-white/80 dark:bg-[#1c1c1e]/80 backdrop-blur-md p-3 rounded-2xl shadow-lg border border-gray-200/50 dark:border-white/10 flex items-center justify-between gap-4">
-                {/* Play Button */}
                 <button 
                     onClick={ttsStatus === 'playing' ? stopTTS : handleTTS}
                     disabled={ttsStatus === 'loading'}
@@ -902,7 +896,6 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
                     )}
                 </button>
 
-                {/* Status & Mode Text */}
                 <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-0.5">
                         <span className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wide">
@@ -915,7 +908,6 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
                         )}
                     </div>
                     
-                    {/* Voice Selector */}
                     <div className="flex items-center gap-2">
                         {settings.ttsProvider === 'google' ? (
                             <span className="text-sm font-medium text-gray-600 dark:text-gray-300">Google 默认音色</span>
@@ -940,7 +932,6 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
                                 </select>
                             </div>
                         )}
-                        {/* Help Button for Browser TTS */}
                         {settings.ttsProvider === 'browser' && (
                             <button onClick={() => isAndroid ? setShowAndroidGuide(true) : setShowIosGuide(true)} className="text-blue-500">
                                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
@@ -949,7 +940,6 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
                     </div>
                 </div>
 
-                {/* Speed Slider or Disabled Tag */}
                 {settings.ttsProvider === 'google' ? (
                     <div className="text-[10px] bg-gray-100 dark:bg-gray-800 text-gray-500 px-2 py-1 rounded">不可调速</div>
                 ) : (
@@ -964,7 +954,6 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
                     </div>
                 )}
                 
-                {/* Download Button (Only for Azure/SF) */}
                 {audioUrl && settings.ttsProvider !== 'browser' && settings.ttsProvider !== 'google' && (
                     <a 
                         href={audioUrl} 
@@ -983,7 +972,7 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
              )}
         </div>
 
-        {/* iOS Guide Modal */}
+        {/* Modal components (IOS/Android Guide) remain unchanged from previous context */}
         {showIosGuide && (
             <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-black/40 backdrop-blur-sm" onClick={() => setShowIosGuide(false)}>
                 <div onClick={e => e.stopPropagation()} className="bg-white dark:bg-[#1c1c1e] p-6 rounded-3xl max-w-sm w-full shadow-2xl border border-white/10">
@@ -1007,7 +996,6 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
             </div>
         )}
 
-        {/* Android Guide Modal */}
         {showAndroidGuide && (
              <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-black/40 backdrop-blur-sm" onClick={() => setShowAndroidGuide(false)}>
                 <div onClick={e => e.stopPropagation()} className="bg-white dark:bg-[#1c1c1e] p-6 rounded-3xl max-w-sm w-full shadow-2xl border border-white/10">
