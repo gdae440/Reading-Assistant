@@ -353,13 +353,34 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
     
             if (settings.browserVoice) {
                 const cleanName = settings.browserVoice.replace('missing:', '');
-                // Try finding by URI first, then by name
-                const voice = freshVoices.find(v => v.voiceURI === settings.browserVoice) || 
-                              freshVoices.find(v => v.name.includes(cleanName));
                 
-                if (voice) {
-                    uttr.voice = voice;
-                    uttr.lang = voice.lang;
+                // Advanced Voice Finding Logic for iOS
+                // 1. Try exact match by URI
+                // 2. Try matching by name
+                // 3. IMPORTANT: Sort matches to prefer "Enhanced", "Premium" or "Siri" to fix iPhone quality issue
+                let candidate: SpeechSynthesisVoice | undefined = freshVoices.find(v => v.voiceURI === settings.browserVoice);
+                
+                if (!candidate) {
+                    const matchingVoices = freshVoices.filter(v => v.name.includes(cleanName));
+                    if (matchingVoices.length > 0) {
+                        // Sort so that "Enhanced" or "Premium" comes first. Also prefer longer names (usually more descriptive in iOS)
+                        matchingVoices.sort((a, b) => {
+                            const score = (name: string) => {
+                                let s = 0;
+                                if (name.includes('Enhanced')) s += 5;
+                                if (name.includes('Premium')) s += 5;
+                                if (name.includes('Siri')) s += 2;
+                                return s;
+                            };
+                            return score(b.name) - score(a.name) || b.name.length - a.name.length;
+                        });
+                        candidate = matchingVoices[0];
+                    }
+                }
+
+                if (candidate) {
+                    uttr.voice = candidate;
+                    uttr.lang = candidate.lang;
                 } else {
                     // Fallback to searching ideal list to get correct lang code
                     const ideal = Object.values(IDEAL_VOICES).flat().find(v => cleanName.includes(v.name));
@@ -592,15 +613,6 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
     const sentences = analysisResult?.sentences || [];
 
     return normalizedInput.split(/\n+/).map((para, pIdx) => {
-        let hlRange = null;
-        for (const s of sentences) {
-             if (para.includes(s.text)) {
-                 const start = para.indexOf(s.text);
-                 hlRange = { start, end: start + s.text.length };
-                 break;
-             }
-        }
-
         return (
             <p key={pIdx} className="mb-4 leading-relaxed text-lg text-gray-800 dark:text-gray-200">
                 {para.split(/(\s+|[.,!?;:()（）"。！？])/).map((chunk, cIdx) => {
@@ -641,10 +653,11 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
   };
 
   return (
-    <div className="flex flex-col min-h-[calc(100vh-4rem)] max-w-5xl mx-auto relative pb-20" onClick={() => setModalPosition(null)}>
+    <div className="flex flex-col min-h-[calc(100vh-4rem)] max-w-5xl mx-auto relative" onClick={() => setModalPosition(null)}>
         {/* Top Toolbar */}
         <div className="flex-none p-4 md:p-6 pb-2">
             <div className="flex items-center justify-between bg-white dark:bg-[#1c1c1e] p-2 rounded-2xl shadow-sm border border-gray-100 dark:border-white/10 overflow-x-auto scrollbar-hide">
+                 {/* Left Group */}
                  <div className="flex items-center gap-2">
                     <button 
                         onClick={() => setIsReaderMode(!isReaderMode)}
@@ -676,50 +689,71 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
                         className={`p-2 rounded-xl flex-none transition-colors flex items-center gap-1.5 ${
                              isAnalyzing ? 'bg-gray-100 dark:bg-gray-800 text-gray-400' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'
                         }`}
+                        title="AI 智能分析"
                     >
-                         {isAnalyzing ? <svg className="animate-spin w-5 h-5" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> : 
-                         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>}
-                         <span className="text-xs font-bold hidden md:inline">AI 分析</span>
+                         {isAnalyzing ? <svg className="animate-spin w-5 h-5" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                         : 
+                         <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M12 2C12 7 17 12 22 12C17 12 12 17 12 22C12 17 7 12 2 12C7 12 12 7 12 2Z" fill="url(#gemini-gradient)" />
+                            <defs>
+                                <linearGradient id="gemini-gradient" x1="0" y1="0" x2="24" y2="24" gradientUnits="userSpaceOnUse">
+                                    <stop offset="0%" stopColor="#3B82F6" />
+                                    <stop offset="50%" stopColor="#8B5CF6" />
+                                    <stop offset="100%" stopColor="#EC4899" />
+                                </linearGradient>
+                            </defs>
+                         </svg>
+                         }
+                         <span className="text-xs font-bold hidden md:inline bg-clip-text text-transparent bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500">AI 分析</span>
                     </button>
-                    
-                    <div className="w-px h-6 bg-gray-200 dark:bg-gray-700 mx-1"></div>
-                    <button 
-                        onClick={() => fileInputRef.current?.click()}
-                        disabled={ocrLoading}
-                        className="p-2 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg flex-none"
-                    >
-                        {ocrLoading ? <svg className="animate-spin w-5 h-5" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> : 
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"></path><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>}
-                    </button>
-                    <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleFileUpload} />
-                    {ocrLoading && <span className="text-xs text-gray-500 dark:text-gray-400 animate-pulse hidden md:inline">{ocrStatus}</span>}
+
+                    {/* OCR Button Moved Here */}
+                    <div className="relative">
+                        <button 
+                            onClick={() => fileInputRef.current?.click()}
+                            className="p-2 text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white transition-colors"
+                            title="图片识别 (OCR)"
+                        >
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"></path><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+                        </button>
+                        {ocrLoading && <span className="absolute -top-1 -right-1 flex h-2 w-2"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span><span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500"></span></span>}
+                        <input 
+                            type="file" 
+                            ref={fileInputRef} 
+                            className="hidden" 
+                            accept="image/*"
+                            onChange={handleFileUpload}
+                        />
+                    </div>
+                    {ocrLoading && <span className="text-xs text-blue-500 animate-pulse hidden md:inline ml-1">{ocrStatus}</span>}
                  </div>
-                 
-                 <button 
-                    onClick={handleTranslateOrReply}
-                    disabled={isTranslating}
-                    className={`ml-2 px-4 py-2 text-sm font-bold rounded-xl transition-all shadow-sm whitespace-nowrap ${
-                        /[\u4e00-\u9fa5]/.test(inputText) 
-                        ? 'bg-purple-50 dark:bg-purple-900/20 text-purple-600 dark:text-purple-300 border border-purple-100 dark:border-purple-500/20' 
-                        : 'bg-gray-50 dark:bg-gray-800 text-gray-700 dark:text-gray-300'
-                    }`}
-                >
-                    {isTranslating ? '生成中...' : (
-                        /[\u4e00-\u9fa5]/.test(inputText) ? '✨ 俄语回复' : '全文翻译'
-                    )}
-                </button>
+
+                 {/* Right Group: Translation Moved Here */}
+                 <div className="flex items-center gap-3">
+                     <button
+                        onClick={handleTranslateOrReply}
+                        disabled={isTranslating}
+                        className={`px-3 py-2 rounded-xl font-bold text-xs transition-all whitespace-nowrap flex items-center gap-1 ${
+                            detectedLang === 'zh'
+                            ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 hover:bg-purple-200 dark:hover:bg-purple-800/40'
+                            : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700'
+                        }`}
+                     >
+                         {isTranslating ? (
+                             <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                         ) : (
+                             detectedLang === 'zh' ? '✨ 俄语回复' : '全文翻译'
+                         )}
+                     </button>
+                 </div>
             </div>
         </div>
 
-        {/* Main Content Area */}
-        <div className="flex-none mx-4 md:mx-6 mb-2 bg-white dark:bg-[#1c1c1e] rounded-3xl shadow-[0_2px_15px_rgb(0,0,0,0.02)] border border-gray-100 dark:border-white/10 overflow-hidden relative min-h-[300px]">
-            <div className={`w-full h-full transition-all duration-500 ${isBlindMode ? 'blur-md opacity-60' : ''}`}>
+        {/* Main Text Area - PADDING & SPACER ADJUSTMENT */}
+        <div className="flex-1 overflow-y-auto p-4 md:p-6">
+            <div className={`bg-white dark:bg-[#1c1c1e] rounded-3xl shadow-sm border border-gray-100 dark:border-white/5 p-6 md:p-8 min-h-[60vh] relative transition-all duration-500 ${isBlindMode ? 'blur-md opacity-60 select-none' : ''}`}>
                 {isReaderMode ? (
-                    <div 
-                        className="absolute inset-0 overflow-y-auto p-6 md:p-8 scrollbar-hide text-lg md:text-xl"
-                        onTouchStart={() => isScrolling.current = false}
-                        onTouchMove={() => isScrolling.current = true}
-                    >
+                    <div className="prose dark:prose-invert max-w-none">
                         {renderReaderContent()}
                     </div>
                 ) : (
@@ -730,291 +764,339 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
                         onSelect={updatePlayMode}
                         onClick={updatePlayMode}
                         onKeyUp={updatePlayMode}
-                        onTouchStart={() => isScrolling.current = false}
-                        onTouchMove={() => isScrolling.current = true}
-                        placeholder="在此输入或粘贴文章..."
-                        className="w-full h-full min-h-[300px] p-6 md:p-8 resize-none focus:outline-none bg-transparent text-lg md:text-xl text-gray-800 dark:text-gray-200 placeholder-gray-300 dark:placeholder-gray-700"
+                        className="w-full h-full min-h-[50vh] bg-transparent border-0 resize-none focus:ring-0 text-lg leading-relaxed text-gray-800 dark:text-gray-200 placeholder-gray-400 dark:placeholder-gray-600 selection:bg-blue-200 dark:selection:bg-blue-800"
+                        placeholder="在此粘贴文章，或点击相机上传图片..."
                     />
                 )}
             </div>
-            <WordDetailModal data={lookupData} isLoading={isLoading} onClose={() => setModalPosition(null)} position={modalPosition} />
+            
+            {/* Analysis Result Panel */}
+            {analysisResult && (
+                <div className="mt-8 mb-8 animate-in slide-in-from-bottom-5 duration-500">
+                    <div className="bg-gradient-to-br from-indigo-50 to-purple-50 dark:from-indigo-950/30 dark:to-purple-950/30 rounded-3xl border border-indigo-100 dark:border-indigo-500/20 shadow-sm overflow-hidden">
+                        <div className="px-6 py-4 flex items-center justify-between border-b border-indigo-100/50 dark:border-indigo-500/10 cursor-pointer" onClick={() => setIsAnalysisCollapsed(!isAnalysisCollapsed)}>
+                             <div className="flex items-center gap-2">
+                                <svg className="w-5 h-5 text-indigo-500" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 2C12 7 17 12 22 12C17 12 12 17 12 22C12 17 7 12 2 12C7 12 12 7 12 2Z" fill="currentColor" /></svg>
+                                <h3 className="font-bold text-gray-900 dark:text-white">AI 智能分析</h3>
+                             </div>
+                             <div className="flex items-center gap-3">
+                                 <button 
+                                    onClick={(e) => { e.stopPropagation(); handleExportAnalysis(); }}
+                                    className="text-xs px-3 py-1 bg-white dark:bg-gray-800 border border-indigo-100 dark:border-indigo-500/20 rounded-full text-indigo-600 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-900/50 flex items-center gap-1"
+                                 >
+                                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                                    一键打包
+                                 </button>
+                                 <button className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-transform duration-300" style={{ transform: isAnalysisCollapsed ? 'rotate(180deg)' : 'rotate(0deg)' }}>
+                                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
+                                 </button>
+                             </div>
+                        </div>
+
+                        {!isAnalysisCollapsed && (
+                            <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-8">
+                                {/* Collocations */}
+                                <div>
+                                    <h4 className="text-sm font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-4">常用词块 (Collocations)</h4>
+                                    <div className="space-y-3">
+                                        {analysisResult.collocations.map((item, idx) => (
+                                            <div key={idx} className="flex items-start justify-between group bg-white/50 dark:bg-white/5 p-3 rounded-xl hover:bg-white dark:hover:bg-white/10 transition-colors">
+                                                <div>
+                                                    <div className="font-semibold text-gray-800 dark:text-gray-200">{item.text}</div>
+                                                    <div className="text-sm text-gray-500 dark:text-gray-400">{item.cn}</div>
+                                                </div>
+                                                <button 
+                                                    onClick={() => addAnalysisItemToVocab(item)}
+                                                    disabled={addedAnalysisItems.has(item.text)}
+                                                    className={`p-1.5 rounded-lg transition-colors ${
+                                                        addedAnalysisItems.has(item.text) 
+                                                        ? 'text-green-500' 
+                                                        : 'text-gray-400 hover:text-indigo-500 hover:bg-indigo-50 dark:hover:bg-indigo-900/30'
+                                                    }`}
+                                                >
+                                                    {addedAnalysisItems.has(item.text) ? (
+                                                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path></svg>
+                                                    ) : (
+                                                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"></path></svg>
+                                                    )}
+                                                </button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                {/* Vocabulary */}
+                                <div>
+                                    <h4 className="text-sm font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-4">核心词汇 (Vocabulary)</h4>
+                                    <div className="space-y-3">
+                                        {analysisResult.vocabulary.map((item, idx) => (
+                                            <div key={idx} className="flex items-start justify-between group bg-white/50 dark:bg-white/5 p-3 rounded-xl hover:bg-white dark:hover:bg-white/10 transition-colors">
+                                                <div>
+                                                    <div className="font-bold text-gray-900 dark:text-white">{item.text}</div>
+                                                    <div className="text-sm text-gray-500 dark:text-gray-400">{item.cn}</div>
+                                                </div>
+                                                <button 
+                                                    onClick={() => addAnalysisItemToVocab(item)}
+                                                    disabled={addedAnalysisItems.has(item.text)}
+                                                    className={`p-1.5 rounded-lg transition-colors ${
+                                                        addedAnalysisItems.has(item.text) 
+                                                        ? 'text-green-500' 
+                                                        : 'text-gray-400 hover:text-indigo-500 hover:bg-indigo-50 dark:hover:bg-indigo-900/30'
+                                                    }`}
+                                                >
+                                                     {addedAnalysisItems.has(item.text) ? (
+                                                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path></svg>
+                                                    ) : (
+                                                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"></path></svg>
+                                                    )}
+                                                </button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                        
+                        {/* Key Sentences Section (Always visible if expanded) */}
+                        {!isAnalysisCollapsed && analysisResult.sentences && analysisResult.sentences.length > 0 && (
+                            <div className="px-6 pb-6 pt-0 border-t border-indigo-100/50 dark:border-indigo-500/10">
+                                 <h4 className="text-sm font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider my-4 flex items-center gap-2">
+                                     🎙️ 重点跟读 (Key Sentences)
+                                 </h4>
+                                 <div className="space-y-4">
+                                     {analysisResult.sentences.map((sent, idx) => (
+                                         <div key={idx} className="bg-white/80 dark:bg-white/5 p-4 rounded-xl border border-indigo-50 dark:border-white/5">
+                                             <div className="flex gap-3">
+                                                 <button 
+                                                    onClick={() => playOneSegment(sent.text)}
+                                                    className="mt-1 flex-none w-8 h-8 rounded-full bg-indigo-100 dark:bg-indigo-900/50 text-indigo-600 dark:text-indigo-300 flex items-center justify-center hover:bg-indigo-200 dark:hover:bg-indigo-800 transition-colors"
+                                                 >
+                                                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                                                 </button>
+                                                 <div>
+                                                     <p className="font-medium text-gray-900 dark:text-white text-lg leading-relaxed">{sent.text}</p>
+                                                     <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">{sent.cn}</p>
+                                                     <p className="text-xs text-indigo-500 dark:text-indigo-400 mt-2 italic flex items-center gap-1">
+                                                         <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                                                         {sent.reason}
+                                                     </p>
+                                                 </div>
+                                             </div>
+                                         </div>
+                                     ))}
+                                 </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
+            
+            {/* Translation Result Panel */}
+            {translationResult && (
+                <div className="mt-6 mb-8 animate-in slide-in-from-bottom-5 duration-500">
+                     <div className={`rounded-3xl p-6 shadow-sm border ${
+                         translationResult.type === 'reply' 
+                         ? 'bg-purple-50 dark:bg-purple-900/10 border-purple-100 dark:border-purple-500/20' 
+                         : 'bg-white dark:bg-[#1c1c1e] border-gray-100 dark:border-white/10'
+                     }`}>
+                         <div className="flex justify-between items-start mb-3">
+                             <div className="flex items-center gap-2">
+                                 <span className={`text-xs font-bold px-2 py-0.5 rounded uppercase tracking-wider ${
+                                     translationResult.type === 'reply' 
+                                     ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300'
+                                     : 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300'
+                                 }`}>
+                                     {translationResult.type === 'reply' ? 'AI 回复建议' : '全文翻译'}
+                                 </span>
+                             </div>
+                             <div className="flex gap-2">
+                                <button 
+                                    onClick={() => {
+                                        navigator.clipboard.writeText(translationResult.text);
+                                        alert("已复制");
+                                    }}
+                                    className="p-1.5 hover:bg-gray-100 dark:hover:bg-white/10 rounded-lg text-gray-400 hover:text-gray-600 transition-colors"
+                                    title="复制"
+                                >
+                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
+                                </button>
+                                <button 
+                                    onClick={() => setTranslationResult(null)}
+                                    className="p-1.5 hover:bg-gray-100 dark:hover:bg-white/10 rounded-lg text-gray-400 hover:text-gray-600 transition-colors"
+                                >
+                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                                </button>
+                             </div>
+                         </div>
+                         <div className="text-lg leading-relaxed whitespace-pre-wrap text-gray-800 dark:text-gray-200">
+                             {translationResult.text}
+                         </div>
+                     </div>
+                </div>
+            )}
+            
+            {/* SPACER FOR SCROLLING PAST FLOATING PLAYER */}
+            <div className="h-40 md:h-44 w-full" aria-hidden="true" />
         </div>
 
-        {/* AI Analysis Result */}
-        {analysisResult && (
-             <div className="flex-none mx-4 md:mx-6 mb-4 p-6 bg-blue-50/50 dark:bg-blue-900/10 rounded-3xl shadow-sm border border-blue-100 dark:border-blue-500/20 relative animate-in fade-in slide-in-from-top-2">
-                 <div className="flex justify-between items-center mb-4">
-                     <h3 className="text-sm font-bold text-blue-800 dark:text-blue-300 uppercase tracking-wide">AI 智能分析</h3>
-                     <div className="flex gap-2">
-                         <button 
-                            onClick={handleExportAnalysis}
-                            className="p-1.5 text-blue-600 hover:bg-blue-100 dark:text-blue-400 dark:hover:bg-blue-900/30 rounded-lg transition-colors flex items-center gap-1 text-xs font-bold"
-                            title="导出为 Anki CSV"
-                         >
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
-                            导出 Anki
-                         </button>
-                         <button 
-                            onClick={() => setIsAnalysisCollapsed(!isAnalysisCollapsed)}
-                            className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-black/5 dark:hover:bg-white/10"
-                         >
-                            <svg className={`w-5 h-5 transition-transform ${isAnalysisCollapsed ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
-                         </button>
+        {/* Bottom Floating Control Bar */}
+        <div className="fixed bottom-6 left-4 right-4 md:left-1/2 md:right-auto md:-translate-x-1/2 md:w-full md:max-w-3xl p-4 bg-white/90 dark:bg-[#1c1c1e]/90 backdrop-blur-xl rounded-3xl shadow-2xl border border-white/20 dark:border-white/10 z-40 transition-all duration-300 pb-4">
+             <div className="flex flex-col gap-4">
+                 <div className="flex items-center gap-3">
+                     {/* Play Button */}
+                     <button
+                        onClick={handleTTS}
+                        disabled={ttsStatus === 'loading' || isFetchingAudio.current}
+                        className={`flex-none w-12 h-12 rounded-full flex items-center justify-center text-white shadow-lg shadow-blue-500/30 transition-all ${
+                            ttsStatus === 'playing' ? 'bg-red-500 hover:bg-red-600' : 'bg-black dark:bg-white dark:text-black hover:bg-gray-800 dark:hover:bg-gray-200'
+                        }`}
+                     >
+                         {ttsStatus === 'loading' || isFetchingAudio.current ? (
+                             <svg className="animate-spin w-5 h-5" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                         ) : ttsStatus === 'playing' ? (
+                            <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>
+                         ) : (
+                            <svg className="w-5 h-5 ml-1" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"></path></svg>
+                         )}
+                     </button>
+                     
+                     <div className="flex-1 min-w-0 flex flex-col justify-center">
+                         <div className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1 flex items-center gap-2">
+                             {settings.shadowingMode && <span className="bg-green-100 text-green-700 px-1.5 rounded text-[10px]">跟读开启</span>}
+                             {playMode === 'select' ? `播放选中 (${selRange.end - selRange.start}字)` : 
+                              playMode === 'continue' ? '从光标处播放' : '全文跟读'}
+                              {playMode === 'select' && (
+                                  <span className="text-[10px] text-blue-500 animate-pulse">✨ 保持选中可循环练习</span>
+                              )}
+                         </div>
+                         
+                         {/* Voice Selector */}
+                         {settings.ttsProvider === 'google' ? (
+                             <div className="text-sm font-bold text-gray-800 dark:text-white">Google 默认音色</div>
+                         ) : (
+                             <div className="flex items-center gap-2 w-full">
+                                <div className="relative flex-1">
+                                    <select 
+                                        value={
+                                            settings.ttsProvider === 'siliconflow' ? settings.sfTtsVoice :
+                                            settings.ttsProvider === 'azure' ? settings.azureVoice :
+                                            settings.browserVoice
+                                        }
+                                        onChange={(e) => handleVoiceChange(e.target.value)}
+                                        className="w-full bg-transparent font-bold text-gray-900 dark:text-white text-sm focus:outline-none appearance-none pr-8 cursor-pointer truncate"
+                                    >
+                                        {settings.ttsProvider === 'siliconflow' && SF_VOICES.map(v => <option key={v.value} value={v.value}>{v.label}</option>)}
+                                        {settings.ttsProvider === 'azure' && AZURE_VOICES.map(v => <option key={v.value} value={v.value}>{v.label}</option>)}
+                                        {settings.ttsProvider === 'browser' && (
+                                            uiVoices.length > 0 
+                                            ? uiVoices.map(v => <option key={v.value} value={v.value} disabled={v.disabled} className={v.disabled ? 'text-gray-400' : ''}>{v.label}</option>)
+                                            : <option value="" disabled>加载本地音色...</option>
+                                        )}
+                                    </select>
+                                    <svg className="w-4 h-4 text-gray-400 absolute right-0 top-1/2 -translate-y-1/2 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
+                                </div>
+                                
+                                {(settings.ttsProvider === 'browser' || settings.ttsProvider === 'azure') && (
+                                    <button 
+                                        onClick={() => settings.ttsProvider === 'browser' ? setShowIosGuide(true) : alert("Azure 音色为云端合成，音质由微软保证。")}
+                                        className="p-1.5 rounded-full bg-blue-50 dark:bg-blue-900/30 text-blue-500 hover:bg-blue-100 dark:hover:bg-blue-900/50 flex-none"
+                                    >
+                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                                    </button>
+                                )}
+                             </div>
+                         )}
                      </div>
+
+                     {/* Action Buttons */}
+                     {audioUrl && settings.ttsProvider !== 'google' && (
+                         <a 
+                            href={audioUrl} 
+                            download={`speech_${Date.now()}.mp3`}
+                            className="p-2.5 rounded-xl bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                            title="下载音频"
+                         >
+                             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                         </a>
+                     )}
                  </div>
 
-                 {!isAnalysisCollapsed && (
-                     <div className="space-y-6">
-                         <div>
-                             <h4 className="text-xs font-bold text-gray-500 mb-2">🎙️ 重点跟读 (Key Sentences)</h4>
-                             <div className="space-y-3">
-                                 {analysisResult.sentences.map((item, idx) => (
-                                     <div key={idx} className="bg-white dark:bg-black/20 p-3 rounded-xl border border-yellow-100 dark:border-white/5 flex gap-3">
-                                         <button 
-                                            onClick={() => playOneSegment(item.text)}
-                                            className="flex-none mt-1 w-8 h-8 flex items-center justify-center bg-yellow-100 text-yellow-700 rounded-full hover:bg-yellow-200"
-                                         >
-                                            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"></path></svg>
-                                         </button>
-                                         <div>
-                                             <div className="font-semibold text-gray-800 dark:text-gray-200 text-sm leading-relaxed">{item.text}</div>
-                                             <div className="text-xs text-gray-500 mt-1">{item.cn}</div>
-                                             <div className="text-[10px] text-yellow-600 dark:text-yellow-500 mt-1 italic">{item.reason}</div>
-                                         </div>
-                                     </div>
-                                 ))}
-                             </div>
-                         </div>
-
-                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                             <div>
-                                 <h4 className="text-xs font-bold text-gray-500 mb-2">常用搭配 / 词块</h4>
-                                 <div className="space-y-2">
-                                     {analysisResult.collocations.map((item, idx) => (
-                                         <div key={idx} className="flex items-center justify-between bg-white dark:bg-black/20 p-2 rounded-lg border border-blue-100 dark:border-white/5">
-                                             <div>
-                                                 <div className="text-sm font-semibold text-gray-800 dark:text-gray-200">{item.text}</div>
-                                                 <div className="text-xs text-gray-500">{item.cn}</div>
-                                             </div>
-                                             <button 
-                                                onClick={() => addAnalysisItemToVocab(item)} 
-                                                disabled={addedAnalysisItems.has(item.text)}
-                                                className={`p-1.5 rounded-full ${addedAnalysisItems.has(item.text) ? 'bg-green-100 text-green-600' : 'text-blue-500 hover:bg-blue-50'}`}
-                                             >
-                                                {addedAnalysisItems.has(item.text) ? (
-                                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path></svg>
-                                                ) : (
-                                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"></path></svg>
-                                                )}
-                                             </button>
-                                         </div>
-                                     ))}
-                                 </div>
-                             </div>
-                             <div>
-                                 <h4 className="text-xs font-bold text-gray-500 mb-2">核心词汇 (B2/C1)</h4>
-                                 <div className="space-y-2">
-                                     {analysisResult.vocabulary.map((item, idx) => (
-                                         <div key={idx} className="flex items-center justify-between bg-white dark:bg-black/20 p-2 rounded-lg border border-purple-100 dark:border-white/5">
-                                             <div>
-                                                 <div className="text-sm font-semibold text-gray-800 dark:text-gray-200">{item.text}</div>
-                                                 <div className="text-xs text-gray-500">{item.cn}</div>
-                                             </div>
-                                             <button 
-                                                onClick={() => addAnalysisItemToVocab(item)} 
-                                                disabled={addedAnalysisItems.has(item.text)}
-                                                className={`p-1.5 rounded-full ${addedAnalysisItems.has(item.text) ? 'bg-green-100 text-green-600' : 'text-purple-500 hover:bg-purple-50'}`}
-                                             >
-                                                {addedAnalysisItems.has(item.text) ? (
-                                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path></svg>
-                                                ) : (
-                                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"></path></svg>
-                                                )}
-                                             </button>
-                                         </div>
-                                     ))}
-                                 </div>
-                             </div>
-                         </div>
+                 {/* Row 2: Speed Slider */}
+                 {settings.ttsProvider === 'google' ? (
+                     <div className="w-full py-1 px-3 bg-yellow-50 dark:bg-yellow-900/20 text-yellow-700 dark:text-yellow-400 text-xs rounded-lg text-center border border-yellow-100 dark:border-yellow-500/20">
+                         Google 免费接口不支持语速调节 (默认 1.0x)
+                     </div>
+                 ) : (
+                     <div className="flex items-center gap-3 px-1">
+                         <span className="text-xs font-bold text-gray-400 w-8">0.5x</span>
+                         <input 
+                             type="range" min="0.5" max="1.5" step="0.1"
+                             value={settings.ttsSpeed}
+                             onChange={(e) => onSettingsChange({ ...settings, ttsSpeed: parseFloat(e.target.value) })}
+                             className="flex-1 h-1.5 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer accent-black dark:accent-white"
+                         />
+                         <span className="text-xs font-bold text-gray-400 w-8 text-right">1.5x</span>
+                         <span className="text-xs font-mono font-medium text-gray-900 dark:text-white min-w-[32px] text-center bg-gray-100 dark:bg-gray-800 rounded px-1">{settings.ttsSpeed.toFixed(1)}x</span>
                      </div>
                  )}
              </div>
-        )}
-
-        {/* Translation/Reply Result Section */}
-        {translationResult && (
-            <div className="flex-none mx-4 md:mx-6 mb-6 p-6 bg-white dark:bg-[#1c1c1e] rounded-3xl shadow-sm border border-purple-100 dark:border-purple-500/20 relative animate-in slide-in-from-top-2 fade-in duration-300">
-                <button 
-                    onClick={() => setTranslationResult(null)}
-                    className="absolute top-4 right-4 p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
-                >
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
-                </button>
-                <div className="flex items-center gap-2 mb-4">
-                    <span className={`text-xs font-bold px-2 py-1 rounded-lg uppercase tracking-wide ${
-                        translationResult.type === 'reply' 
-                        ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300'
-                        : 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300'
-                    }`}>
-                        {translationResult.type === 'reply' ? '智能回复' : '翻译结果'}
-                    </span>
-                </div>
-                <div className="text-lg leading-relaxed text-gray-800 dark:text-gray-200 whitespace-pre-wrap">
-                    {translationResult.text}
-                </div>
-                <div className="mt-4 flex justify-end">
-                    <button 
-                        onClick={() => {
-                            navigator.clipboard.writeText(translationResult.text);
-                            alert("已复制");
-                        }}
-                        className="text-sm font-medium text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white flex items-center gap-1.5 transition-colors"
-                    >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
-                        复制内容
-                    </button>
-                </div>
-            </div>
-        )}
-
-        {/* Bottom Control Bar */}
-        <div className="flex-none p-4 md:p-6 pt-2 pb-[calc(env(safe-area-inset-bottom)+1rem)]">
-             <div className="bg-white/80 dark:bg-[#1c1c1e]/80 backdrop-blur-md p-3 rounded-2xl shadow-lg border border-gray-200/50 dark:border-white/10 flex items-center justify-between gap-4">
-                <button 
-                    onClick={ttsStatus === 'playing' ? stopTTS : handleTTS}
-                    disabled={ttsStatus === 'loading'}
-                    className={`flex-none w-12 h-12 flex items-center justify-center rounded-full shadow-md transition-all ${
-                        ttsStatus === 'loading' ? 'bg-gray-200 dark:bg-gray-700' : 'bg-black dark:bg-white text-white dark:text-black hover:scale-105 active:scale-95'
-                    }`}
-                >
-                    {ttsStatus === 'loading' ? (
-                        <svg className="animate-spin w-5 h-5 text-gray-500" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                    ) : ttsStatus === 'playing' ? (
-                        <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"></path></svg>
-                    ) : (
-                        <svg className="w-5 h-5 ml-0.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"></path></svg>
-                    )}
-                </button>
-
-                <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-0.5">
-                        <span className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wide">
-                            {playMode === 'select' ? '播放选中' : playMode === 'continue' ? '从光标处播放' : '全文跟读'}
-                        </span>
-                        {settings.shadowingMode && (
-                             <span className="text-[10px] font-bold bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300 px-1.5 py-0.5 rounded">
-                                跟读中
-                             </span>
-                        )}
-                    </div>
-                    
-                    <div className="flex items-center gap-2">
-                        {settings.ttsProvider === 'google' ? (
-                            <span className="text-sm font-medium text-gray-600 dark:text-gray-300">Google 默认音色</span>
-                        ) : (
-                            <div className="relative flex-1">
-                                <select
-                                    value={
-                                        settings.ttsProvider === 'siliconflow' ? settings.sfTtsVoice :
-                                        settings.ttsProvider === 'azure' ? settings.azureVoice :
-                                        settings.browserVoice
-                                    }
-                                    onChange={(e) => handleVoiceChange(e.target.value)}
-                                    className="w-full bg-transparent border-none p-0 pr-8 text-sm font-semibold text-gray-800 dark:text-gray-200 focus:ring-0 cursor-pointer truncate"
-                                >
-                                    {settings.ttsProvider === 'siliconflow' && SF_VOICES.map(v => <option key={v.value} value={v.value}>{v.label}</option>)}
-                                    {settings.ttsProvider === 'azure' && AZURE_VOICES.map(v => <option key={v.value} value={v.value}>{v.label}</option>)}
-                                    {settings.ttsProvider === 'browser' && uiVoices.map(v => (
-                                        <option key={v.value} value={v.value} disabled={v.disabled} className={v.value.startsWith('missing:') ? 'text-gray-400' : ''}>
-                                            {v.label}
-                                        </option>
-                                    ))}
-                                </select>
-                            </div>
-                        )}
-                        {settings.ttsProvider === 'browser' && (
-                            <button onClick={() => isAndroid ? setShowAndroidGuide(true) : setShowIosGuide(true)} className="text-blue-500">
-                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-                            </button>
-                        )}
-                    </div>
-                </div>
-
-                {settings.ttsProvider === 'google' ? (
-                    <div className="text-[10px] bg-gray-100 dark:bg-gray-800 text-gray-500 px-2 py-1 rounded">不可调速</div>
-                ) : (
-                    <div className="flex flex-col items-end w-24">
-                        <span className="text-[10px] font-mono text-gray-500 mb-1">{settings.ttsSpeed.toFixed(1)}x</span>
-                        <input 
-                            type="range" min="0.5" max="1.5" step="0.1"
-                            value={settings.ttsSpeed}
-                            onChange={(e) => onSettingsChange({ ...settings, ttsSpeed: parseFloat(e.target.value) })}
-                            className="w-full h-1 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer accent-black dark:accent-white"
-                        />
-                    </div>
-                )}
-                
-                {audioUrl && settings.ttsProvider !== 'browser' && settings.ttsProvider !== 'google' && (
-                    <a 
-                        href={audioUrl} 
-                        download={`audio_${Date.now()}.mp3`}
-                        className="p-2 bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
-                    >
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
-                    </a>
-                )}
-             </div>
-             
-             {playMode === 'select' && (
-                <div className="absolute bottom-24 left-1/2 -translate-x-1/2 bg-black/75 text-white text-xs px-3 py-1 rounded-full backdrop-blur pointer-events-none animate-in fade-in slide-in-from-bottom-2">
-                    ✨ 保持选中可循环练习
-                </div>
-             )}
         </div>
+        
+        {/* Modals */}
+        <WordDetailModal 
+            data={lookupData} 
+            isLoading={isLoading} 
+            position={modalPosition}
+            onClose={() => setModalPosition(null)}
+        />
 
-        {/* Modal components (IOS/Android Guide) remain unchanged from previous context */}
         {showIosGuide && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-black/40 backdrop-blur-sm" onClick={() => setShowIosGuide(false)}>
-                <div onClick={e => e.stopPropagation()} className="bg-white dark:bg-[#1c1c1e] p-6 rounded-3xl max-w-sm w-full shadow-2xl border border-white/10">
-                    <h3 className="text-lg font-bold mb-4 text-black dark:text-white">如何开启高音质?</h3>
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm" onClick={() => setShowIosGuide(false)}>
+                <div onClick={e => e.stopPropagation()} className="bg-white dark:bg-[#1c1c1e] p-6 rounded-3xl max-w-sm w-full shadow-2xl relative border border-white/10">
+                    <button onClick={() => setShowIosGuide(false)} className="absolute top-4 right-4 text-gray-400">
+                         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                    </button>
+                    <h4 className="font-bold text-lg mb-4 text-gray-900 dark:text-white">如何开启高音质 (iOS)?</h4>
                     <div className="space-y-4 text-sm text-gray-600 dark:text-gray-300">
-                        <p>iOS 系统包含顶级的 Neural 语音包 (如 Daniel, TingTing 增强版)，但默认不开启。</p>
-                        <ol className="list-decimal list-inside space-y-2 marker:text-blue-500">
-                            <li>打开 <strong>设置</strong> → <strong>辅助功能</strong></li>
-                            <li>点击 <strong>朗读内容</strong> → <strong>声音</strong></li>
-                            <li>选择对应语言 (如 英语 → 英语(英国))</li>
-                            <li>下载 <strong>Enhanced/Premium (优化/高音质)</strong> 版本</li>
-                        </ol>
-                        <div className="p-3 bg-green-50 dark:bg-green-900/20 rounded-xl text-green-700 dark:text-green-300 text-xs">
-                            配置完成后，回到本页面<strong>刷新</strong>，即可在下拉菜单中选择刚刚下载的高级音色！
+                        <p>iOS 系统自带非常优质的神经网络引擎音色（如 Daniel, TingTing 增强版），但需要手动下载。</p>
+                        <div className="bg-gray-50 dark:bg-white/5 p-4 rounded-2xl space-y-2">
+                            <div className="font-bold text-gray-900 dark:text-white mb-2">设置步骤：</div>
+                            <ol className="list-decimal list-inside space-y-1">
+                                <li>打开 <strong>设置</strong> → <strong>辅助功能</strong></li>
+                                <li>点击 <strong>朗读内容</strong> → <strong>声音</strong></li>
+                                <li>选择对应语言 (如 英语 → 英语(英国))</li>
+                                <li>下载 <strong>Enhanced/Premium (优化/高音质)</strong> 版本</li>
+                            </ol>
+                            <div className="p-3 bg-green-50 dark:bg-green-900/20 rounded-xl text-green-700 dark:text-green-300 text-xs mt-3 border border-green-100 dark:border-green-500/20">
+                                下载完成后，回到本应用刷新，即可在下拉菜单中选择该音色。
+                            </div>
                         </div>
                     </div>
-                    <button onClick={() => setShowIosGuide(false)} className="mt-6 w-full py-3 bg-black dark:bg-white text-white dark:text-black rounded-xl font-bold">
-                        明白了
-                    </button>
                 </div>
             </div>
         )}
 
         {showAndroidGuide && (
-             <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-black/40 backdrop-blur-sm" onClick={() => setShowAndroidGuide(false)}>
-                <div onClick={e => e.stopPropagation()} className="bg-white dark:bg-[#1c1c1e] p-6 rounded-3xl max-w-sm w-full shadow-2xl border border-white/10">
-                    <h3 className="text-lg font-bold mb-4 text-black dark:text-white">Android 音质优化</h3>
+             <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm" onClick={() => setShowAndroidGuide(false)}>
+                <div onClick={e => e.stopPropagation()} className="bg-white dark:bg-[#1c1c1e] p-6 rounded-3xl max-w-sm w-full shadow-2xl relative border border-white/10">
+                    <button onClick={() => setShowAndroidGuide(false)} className="absolute top-4 right-4 text-gray-400">
+                         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                    </button>
+                    <h4 className="font-bold text-lg mb-4 text-gray-900 dark:text-white">Android 高音质指南</h4>
                     <div className="space-y-4 text-sm text-gray-600 dark:text-gray-300">
-                        <p>建议使用 Google 官方语音服务以获得最佳体验。</p>
-                        <ol className="list-decimal list-inside space-y-2 marker:text-green-500">
-                            <li>打开 <strong>设置</strong> → <strong>无障碍/辅助功能</strong></li>
-                            <li>点击 <strong>文本转语音 (TTS) 输出</strong></li>
-                            <li>首选引擎选择 <strong>Speech Services by Google</strong></li>
-                            <li>点击齿轮图标 → 安装语音数据 → 下载对应语言包</li>
-                        </ol>
-                        <div className="mt-4 text-xs text-gray-500">
-                            提示: Android 音色列表中的 "Network" 或 "Online" 通常代表更高音质。
+                        <p>建议安装 Google 官方语音服务以获得最佳体验。</p>
+                        <div className="bg-gray-50 dark:bg-white/5 p-4 rounded-2xl space-y-2">
+                            <ol className="list-decimal list-inside space-y-1">
+                                <li>进入 <strong>系统设置</strong> → <strong>辅助功能</strong></li>
+                                <li>点击 <strong>文本转语音 (TTS) 输出</strong></li>
+                                <li>首选引擎选择 <strong>Speech Services by Google</strong></li>
+                                <li>点击齿轮图标 → 安装语音数据 → 下载对应语言包</li>
+                            </ol>
+                            <div className="mt-4 text-xs text-gray-500">
+                                提示: Android 音色列表中的 "Network" 或 "Online" 通常代表更高音质。
+                            </div>
                         </div>
                     </div>
-                    <button onClick={() => setShowAndroidGuide(false)} className="mt-6 w-full py-3 bg-black dark:bg-white text-white dark:text-black rounded-xl font-bold">
-                        明白了
-                    </button>
                 </div>
             </div>
         )}
