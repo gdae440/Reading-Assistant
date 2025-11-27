@@ -527,6 +527,7 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
                 const utterance = new SpeechSynthesisUtterance(textToPlay);
                 utterance.rate = settings.ttsSpeed;
                 
+                // Default fallback lang
                 let langCode = 'en-US';
                 if (detectedLang === 'zh') langCode = 'zh-CN';
                 if (detectedLang === 'ru') langCode = 'ru-RU';
@@ -535,10 +536,11 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
 
                 if (settings.browserVoice) {
                     const selectedVoice = window.speechSynthesis.getVoices().find(v => v.voiceURI === settings.browserVoice);
-                    // IMPORTANT: Only set voice if found. If browserVoice is empty (default) or not found,
-                    // DO NOT set utterance.voice. Let the OS handle high-quality default based on lang.
+                    // FIXED: If user explicitly selected a voice, USE IT and USE ITS LANGUAGE.
+                    // This prevents "Daniel (en-GB)" from being treated as "en-US" and falling back to default Samantha.
                     if (selectedVoice) {
                         utterance.voice = selectedVoice;
+                        utterance.lang = selectedVoice.lang; // CRITICAL FIX
                     }
                 }
 
