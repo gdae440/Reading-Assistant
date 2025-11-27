@@ -67,7 +67,14 @@ export interface AnalysisItem {
   cn: string;
 }
 
+export interface AnalysisSentence {
+  text: string;
+  cn: string;
+  reason: string;
+}
+
 export interface AnalysisResult {
   collocations: AnalysisItem[];
   vocabulary: AnalysisItem[];
+  sentences: AnalysisSentence[];
 }

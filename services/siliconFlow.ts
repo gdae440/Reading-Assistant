@@ -177,6 +177,42 @@ export class SiliconFlowService {
   }
 
   /**
+   * Fixes OCR text formatting (merging broken lines, etc.) using LLM.
+   */
+  async fixOCRFormatting(text: string, model: string): Promise<string> {
+    const prompt = `
+    You are a text formatting assistant. The user will provide text extracted from an image (OCR). It often has incorrect line breaks within sentences. 
+    Your Task:
+    1. Merge lines that belong to the same sentence.
+    2. Preserve true paragraph breaks (double newlines).
+    3. Fix obvious OCR typos if safe to do so.
+    4. Return ONLY the cleaned text. Do not add markdown or explanations.
+    `;
+
+    try {
+      const response = await fetch(`${BASE_URL}/chat/completions`, {
+        method: "POST",
+        headers: this.getHeaders(),
+        body: JSON.stringify({
+          model: model,
+          messages: [
+            { role: "system", content: prompt },
+            { role: "user", content: text }
+          ],
+          temperature: 0.1
+        })
+      });
+
+      if (!response.ok) return text; // Fallback to raw text if optimization fails
+      const data = await response.json();
+      return data.choices[0].message.content;
+    } catch (error) {
+      console.error("OCR Formatting Error:", error);
+      return text;
+    }
+  }
+
+  /**
    * Generates audio using SiliconFlow TTS models.
    */
   async generateSpeech(text: string, model: string, voice: string, speed: number): Promise<ArrayBuffer> {
@@ -278,18 +314,20 @@ export class SiliconFlowService {
    */
   async analyzeText(text: string, model: string): Promise<AnalysisResult> {
     const prompt = `
-    Analyze the following text. 
+    Analyze the following text.
     1. Extract 5-10 useful Collocations/Phrases (chunks).
     2. Extract 5-10 Core Vocabulary words (B2/C1 level or key terms).
+    3. Extract 3-5 Key Sentences suitable for shadowing practice (good rhythm, useful grammar).
     
     Return a strictly valid JSON object with this structure:
     {
       "collocations": [{"text": "original phrase", "cn": "chinese meaning"}],
-      "vocabulary": [{"text": "word", "cn": "chinese meaning"}]
+      "vocabulary": [{"text": "word", "cn": "chinese meaning"}],
+      "sentences": [{"text": "full sentence", "cn": "chinese translation", "reason": "why it's good"}]
     }
 
     Text to analyze:
-    ${text.slice(0, 2000)}
+    ${text.slice(0, 3000)}
     `;
 
     try {
@@ -310,7 +348,7 @@ export class SiliconFlowService {
       return JSON.parse(content);
     } catch (error) {
       console.error("Analysis Error:", error);
-      return { collocations: [], vocabulary: [] };
+      return { collocations: [], vocabulary: [], sentences: [] };
     }
   }
 }

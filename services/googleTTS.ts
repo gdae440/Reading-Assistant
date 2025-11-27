@@ -2,8 +2,12 @@
 export class GoogleFreeTTS {
   private isPlaying = false;
   private audioQueue: string[] = [];
-  private currentAudio: HTMLAudioElement | null = null;
+  private audioElement: HTMLAudioElement;
   private onComplete: () => void = () => {};
+
+  constructor() {
+    this.audioElement = new Audio();
+  }
 
   /**
    * Splits long text into smaller chunks (max ~200 chars) by punctuation
@@ -59,27 +63,26 @@ export class GoogleFreeTTS {
     if (!text) return;
 
     // Google Translate TTS API (Unofficial but widely used)
-    // client=tw-ob is the standard client ID for text-only requests
     const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(text)}&tl=${lang}&client=tw-ob`;
 
     return new Promise<void>((resolve) => {
-        const audio = new Audio(url);
-        this.currentAudio = audio;
-        audio.playbackRate = speed;
+        // Reuse the existing audio element to allow iOS playback
+        this.audioElement.src = url;
+        this.audioElement.playbackRate = speed;
         
-        audio.onended = () => {
+        this.audioElement.onended = () => {
             resolve();
             this.playNextChunk(lang, speed);
         };
         
-        audio.onerror = (e) => {
+        this.audioElement.onerror = (e) => {
             console.error("Google TTS Playback Error", e);
             // Skip to next chunk on error
             resolve();
             this.playNextChunk(lang, speed);
         };
 
-        audio.play().catch(e => {
+        this.audioElement.play().catch(e => {
             console.error("Audio play failed (interaction required?)", e);
             this.stop();
         });
@@ -89,9 +92,9 @@ export class GoogleFreeTTS {
   stop() {
     this.isPlaying = false;
     this.audioQueue = [];
-    if (this.currentAudio) {
-        this.currentAudio.pause();
-        this.currentAudio = null;
+    if (this.audioElement) {
+        this.audioElement.pause();
+        this.audioElement.currentTime = 0;
     }
   }
 }

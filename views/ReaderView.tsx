@@ -124,7 +124,9 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
   const [ttsStatus, setTtsStatus] = useState<'idle' | 'loading' | 'playing'>('idle');
   const [isTranslating, setIsTranslating] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isAnalysisCollapsed, setIsAnalysisCollapsed] = useState(false);
   const [ocrLoading, setOcrLoading] = useState(false);
+  const [ocrStatus, setOcrStatus] = useState("");
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [showIosGuide, setShowIosGuide] = useState(false);
   const [showAndroidGuide, setShowAndroidGuide] = useState(false);
@@ -236,15 +238,21 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
     if (!settings.apiKey) { alert("请先在设置中配置 SiliconFlow API Key"); return; }
 
     setOcrLoading(true);
+    setOcrStatus("识别中...");
     try {
         const base64 = await compressImage(file);
-        const text = await sfService.ocrImage(base64, settings.visionModel);
-        setInputText(prev => prev + (prev ? "\n\n" : "") + text);
+        const rawText = await sfService.ocrImage(base64, settings.visionModel);
+        
+        setOcrStatus("正在优化排版...");
+        const cleanText = await sfService.fixOCRFormatting(rawText, settings.llmModel);
+
+        setInputText(prev => prev + (prev ? "\n\n" : "") + cleanText);
     } catch (err) {
         alert("OCR 识别失败，请检查图片或网络");
         console.error(err);
     } finally {
         setOcrLoading(false);
+        setOcrStatus("");
         if (fileInputRef.current) fileInputRef.current.value = "";
     }
   };
@@ -422,8 +430,15 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
         const start = selRange.start;
         const end = selRange.end > start ? selRange.end : inputText.length;
         const segment = inputText.slice(start, end).trim();
-        if (segment) textToPlay = segment;
-        else setPlayMode('all'); 
+        // Check if segment is actually just whitespace (e.g. cursor at end)
+        // If so, fallback to ALL mode.
+        if (segment) {
+            textToPlay = segment;
+        } else {
+            setPlayMode('all'); 
+            // Fallback to full text immediately if segment is empty
+            textToPlay = inputText; 
+        }
     }
 
     stopTTS();
@@ -507,6 +522,7 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
 
     setIsAnalyzing(true);
     setAnalysisResult(null);
+    setIsAnalysisCollapsed(false);
 
     try {
         const result = await sfService.analyzeText(inputText, settings.llmModel);
@@ -516,6 +532,30 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
     } finally {
         setIsAnalyzing(false);
     }
+  };
+
+  const handleExportAnalysis = () => {
+      if (!analysisResult) return;
+      
+      let csvContent = "";
+      
+      const addToCsv = (front: string, back: string, tag: string) => {
+          const escape = (s: string) => `"${s.replace(/"/g, '""')}"`;
+          csvContent += `${escape(front)},${escape(back)},${escape(tag)}\n`;
+      };
+
+      analysisResult.collocations.forEach(c => addToCsv(c.text, c.cn, "PolyGlot_Collocation"));
+      analysisResult.vocabulary.forEach(v => addToCsv(v.text, v.cn, "PolyGlot_Vocab"));
+      analysisResult.sentences.forEach(s => addToCsv(s.text, `${s.cn}\n\n[Reason: ${s.reason}]`, "PolyGlot_Sentence"));
+
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.setAttribute("href", url);
+      link.setAttribute("download", `analysis_export_${Date.now()}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
   };
 
   const addAnalysisItemToVocab = (item: {text: string, cn: string}) => {
@@ -531,22 +571,81 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
 
   const renderReaderContent = () => {
     if (!inputText) return <div className="text-gray-400 mt-10 text-center">在此粘贴文章，开始跟读...</div>;
-    return inputText.split(/\n+/).map((para, pIdx) => (
-        <p key={pIdx} className="mb-4 leading-relaxed text-lg text-gray-800 dark:text-gray-200">
-            {para.split(/(\s+|[.,!?;:()（）"。！？])/).map((chunk, cIdx) => {
-                if (!chunk.trim() || /^[.,!?;:()（）"。！？]+$/.test(chunk)) return <span key={cIdx}>{chunk}</span>;
-                return (
-                    <span 
-                        key={cIdx} 
-                        onClick={(e) => handleWordClick(e, chunk)}
-                        className="cursor-pointer hover:bg-blue-100 dark:hover:bg-blue-900/50 hover:text-blue-700 dark:hover:text-blue-300 rounded px-0.5 transition-colors"
-                    >
-                        {chunk}
-                    </span>
-                );
-            })}
-        </p>
-    ));
+    
+    // Normalize text for matching
+    const normalizedInput = inputText.replace(/\r\n/g, '\n');
+    const sentences = analysisResult?.sentences || [];
+
+    // Helper to find sentence range
+    const findSentenceRange = (paragraph: string, sentence: string) => {
+        const pNorm = paragraph.replace(/\s+/g, ' ').trim();
+        const sNorm = sentence.replace(/\s+/g, ' ').trim();
+        const idx = pNorm.indexOf(sNorm);
+        if (idx !== -1) {
+             // Approximation: Find loose match in original string
+             // Ideally we need more robust fuzzy matching, but for now simple string inclusion check
+             // Note: highlighting exact span in raw text is hard if whitespace differs.
+             // We will try simple inclusion.
+             const start = paragraph.indexOf(sentence);
+             if (start !== -1) return { start, end: start + sentence.length };
+        }
+        return null;
+    };
+
+    return normalizedInput.split(/\n+/).map((para, pIdx) => {
+        // Check if any key sentence is in this paragraph
+        let hlRange = null;
+        for (const s of sentences) {
+             if (para.includes(s.text)) {
+                 const start = para.indexOf(s.text);
+                 hlRange = { start, end: start + s.text.length };
+                 break;
+             }
+        }
+
+        return (
+            <p key={pIdx} className="mb-4 leading-relaxed text-lg text-gray-800 dark:text-gray-200">
+                {para.split(/(\s+|[.,!?;:()（）"。！？])/).map((chunk, cIdx) => {
+                    if (!chunk.trim() || /^[.,!?;:()（）"。！？]+$/.test(chunk)) return <span key={cIdx}>{chunk}</span>;
+                    
+                    // Simple highlighting if this chunk is part of a key sentence (loose check)
+                    let isHighlight = false;
+                    if (hlRange) {
+                        // This logic is simplified; accurate index tracking is complex with split
+                        // For now, if the chunk matches a key sentence text exactly, highlight it? No, chunks are small.
+                        // We check if the paragraph contains the key sentence, and wrap the whole sentence.
+                        // But here we are iterating chunks.
+                    }
+                    // REFACTOR: Instead of chunk mapping for highlighting, let's wrap the text
+                    // But we also need clickable words.
+                    // Hybrid approach: 
+                    // If matched, apply bg to the wrapper of those chunks? Hard.
+                    // Alternative: Apply highlight class to individual word spans if they are inside the range.
+                    // Since we don't track indices easily here, let's just highlight specific words if they are part of the key sentence?
+                    // Better: Highlight the whole paragraph if it *is* the sentence?
+                    // Let's rely on the user reading the Analysis panel for exact sentences, and here just click words.
+                    // Or: Just apply a background to the paragraph if it contains a key sentence?
+                    
+                    // Let's try checking inclusion in key sentences
+                    const belongsToKeySentence = sentences.some(s => s.text.includes(chunk) && para.includes(s.text));
+                    
+                    return (
+                        <span 
+                            key={cIdx} 
+                            onClick={(e) => handleWordClick(e, chunk)}
+                            className={`cursor-pointer rounded px-0.5 transition-colors ${
+                                belongsToKeySentence 
+                                ? 'bg-yellow-100 dark:bg-yellow-900/30 text-gray-900 dark:text-gray-100 border-b-2 border-yellow-300' 
+                                : 'hover:bg-blue-100 dark:hover:bg-blue-900/50 hover:text-blue-700 dark:hover:text-blue-300'
+                            }`}
+                        >
+                            {chunk}
+                        </span>
+                    );
+                })}
+            </p>
+        );
+    });
   };
 
   const handleVoiceChange = (val: string) => {
@@ -612,6 +711,7 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
                         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"></path><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>}
                     </button>
                     <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleFileUpload} />
+                    {ocrLoading && <span className="text-xs text-gray-500 dark:text-gray-400 animate-pulse hidden md:inline">{ocrStatus}</span>}
                  </div>
                  
                  <button 
@@ -663,44 +763,86 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
         {/* AI Analysis Result */}
         {analysisResult && (
              <div className="flex-none mx-4 md:mx-6 mb-4 p-6 bg-blue-50/50 dark:bg-blue-900/10 rounded-3xl shadow-sm border border-blue-100 dark:border-blue-500/20 relative animate-in fade-in slide-in-from-top-2">
-                 <button onClick={() => setAnalysisResult(null)} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600">
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
-                 </button>
-                 <h3 className="text-sm font-bold text-blue-800 dark:text-blue-300 uppercase tracking-wide mb-4">AI 智能分析</h3>
-                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                     <div>
-                         <h4 className="text-xs font-bold text-gray-500 mb-2">常用搭配 / 词块</h4>
-                         <div className="space-y-2">
-                             {analysisResult.collocations.map((item, idx) => (
-                                 <div key={idx} className="flex items-center justify-between bg-white dark:bg-black/20 p-2 rounded-lg border border-blue-100 dark:border-white/5">
-                                     <div>
-                                         <div className="text-sm font-semibold text-gray-800 dark:text-gray-200">{item.text}</div>
-                                         <div className="text-xs text-gray-500">{item.cn}</div>
-                                     </div>
-                                     <button onClick={() => addAnalysisItemToVocab(item)} className="p-1.5 text-blue-500 hover:bg-blue-50 rounded-full">
-                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"></path></svg>
-                                     </button>
-                                 </div>
-                             ))}
-                         </div>
-                     </div>
-                     <div>
-                         <h4 className="text-xs font-bold text-gray-500 mb-2">核心词汇 (B2/C1)</h4>
-                         <div className="space-y-2">
-                             {analysisResult.vocabulary.map((item, idx) => (
-                                 <div key={idx} className="flex items-center justify-between bg-white dark:bg-black/20 p-2 rounded-lg border border-purple-100 dark:border-white/5">
-                                     <div>
-                                         <div className="text-sm font-semibold text-gray-800 dark:text-gray-200">{item.text}</div>
-                                         <div className="text-xs text-gray-500">{item.cn}</div>
-                                     </div>
-                                     <button onClick={() => addAnalysisItemToVocab(item)} className="p-1.5 text-purple-500 hover:bg-purple-50 rounded-full">
-                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"></path></svg>
-                                     </button>
-                                 </div>
-                             ))}
-                         </div>
+                 <div className="flex justify-between items-center mb-4">
+                     <h3 className="text-sm font-bold text-blue-800 dark:text-blue-300 uppercase tracking-wide">AI 智能分析</h3>
+                     <div className="flex gap-2">
+                         <button 
+                            onClick={handleExportAnalysis}
+                            className="p-1.5 text-blue-600 hover:bg-blue-100 dark:text-blue-400 dark:hover:bg-blue-900/30 rounded-lg transition-colors flex items-center gap-1 text-xs font-bold"
+                            title="导出为 Anki CSV"
+                         >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                            导出 Anki
+                         </button>
+                         <button 
+                            onClick={() => setIsAnalysisCollapsed(!isAnalysisCollapsed)}
+                            className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-black/5 dark:hover:bg-white/10"
+                         >
+                            <svg className={`w-5 h-5 transition-transform ${isAnalysisCollapsed ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
+                         </button>
                      </div>
                  </div>
+
+                 {!isAnalysisCollapsed && (
+                     <div className="space-y-6">
+                         {/* Key Sentences Section */}
+                         <div>
+                             <h4 className="text-xs font-bold text-gray-500 mb-2">🎙️ 重点跟读 (Key Sentences)</h4>
+                             <div className="space-y-3">
+                                 {analysisResult.sentences.map((item, idx) => (
+                                     <div key={idx} className="bg-white dark:bg-black/20 p-3 rounded-xl border border-yellow-100 dark:border-white/5 flex gap-3">
+                                         <button 
+                                            onClick={() => playOneSegment(item.text)}
+                                            className="flex-none mt-1 w-8 h-8 flex items-center justify-center bg-yellow-100 text-yellow-700 rounded-full hover:bg-yellow-200"
+                                         >
+                                            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"></path></svg>
+                                         </button>
+                                         <div>
+                                             <div className="font-semibold text-gray-800 dark:text-gray-200 text-sm leading-relaxed">{item.text}</div>
+                                             <div className="text-xs text-gray-500 mt-1">{item.cn}</div>
+                                             <div className="text-[10px] text-yellow-600 dark:text-yellow-500 mt-1 italic">{item.reason}</div>
+                                         </div>
+                                     </div>
+                                 ))}
+                             </div>
+                         </div>
+
+                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                             <div>
+                                 <h4 className="text-xs font-bold text-gray-500 mb-2">常用搭配 / 词块</h4>
+                                 <div className="space-y-2">
+                                     {analysisResult.collocations.map((item, idx) => (
+                                         <div key={idx} className="flex items-center justify-between bg-white dark:bg-black/20 p-2 rounded-lg border border-blue-100 dark:border-white/5">
+                                             <div>
+                                                 <div className="text-sm font-semibold text-gray-800 dark:text-gray-200">{item.text}</div>
+                                                 <div className="text-xs text-gray-500">{item.cn}</div>
+                                             </div>
+                                             <button onClick={() => addAnalysisItemToVocab(item)} className="p-1.5 text-blue-500 hover:bg-blue-50 rounded-full">
+                                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"></path></svg>
+                                             </button>
+                                         </div>
+                                     ))}
+                                 </div>
+                             </div>
+                             <div>
+                                 <h4 className="text-xs font-bold text-gray-500 mb-2">核心词汇 (B2/C1)</h4>
+                                 <div className="space-y-2">
+                                     {analysisResult.vocabulary.map((item, idx) => (
+                                         <div key={idx} className="flex items-center justify-between bg-white dark:bg-black/20 p-2 rounded-lg border border-purple-100 dark:border-white/5">
+                                             <div>
+                                                 <div className="text-sm font-semibold text-gray-800 dark:text-gray-200">{item.text}</div>
+                                                 <div className="text-xs text-gray-500">{item.cn}</div>
+                                             </div>
+                                             <button onClick={() => addAnalysisItemToVocab(item)} className="p-1.5 text-purple-500 hover:bg-purple-50 rounded-full">
+                                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"></path></svg>
+                                             </button>
+                                         </div>
+                                     ))}
+                                 </div>
+                             </div>
+                         </div>
+                     </div>
+                 )}
              </div>
         )}
 
