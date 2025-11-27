@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+
+import React, { useState, useEffect } from 'react';
 import { Tab, AppSettings, WordEntry, HistoryEntry } from './types';
 import { useLocalStorage } from './hooks/useLocalStorage';
 import { ReaderView } from './views/ReaderView';
@@ -10,7 +11,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   llmModel: 'deepseek-ai/DeepSeek-V3.2-Exp',
   visionModel: 'Qwen/Qwen3-VL-32B-Instruct',
   
-  ttsProvider: 'siliconflow',
+  ttsProvider: 'browser', // Default to Local Browser TTS
   ttsSpeed: 1.0,
 
   // SiliconFlow Defaults
@@ -19,17 +20,25 @@ const DEFAULT_SETTINGS: AppSettings = {
 
   // Azure Defaults
   azureKey: '',
-  azureRegion: 'westcentralus', // Updated to user's specific region
-  azureVoice: 'en-US-AvaMultilingualNeural'
+  azureRegion: 'westcentralus', 
+  azureVoice: 'en-US-AvaMultilingualNeural',
+
+  // Browser Defaults
+  browserVoice: '' // Empty means "System Default"
 };
 
 function App() {
   const [activeTab, setActiveTab] = useState<Tab>(Tab.READER);
-  // Note: If previous settings exist in local storage with different structure, 
-  // they will merge or need migration. For now, we assume clean slate or compatible types.
   const [settings, setSettings] = useLocalStorage<AppSettings>('polyglot_settings', DEFAULT_SETTINGS);
   const [vocab, setVocab] = useLocalStorage<WordEntry[]>('polyglot_vocab', []);
   const [history, setHistory] = useLocalStorage<HistoryEntry[]>('polyglot_history', []);
+
+  // Migration Effect: Fix broken voices (e.g., Ollie) for existing users
+  useEffect(() => {
+    if (settings.azureVoice === 'en-GB-OllieNeural') {
+        setSettings(prev => ({ ...prev, azureVoice: 'en-GB-RyanNeural' }));
+    }
+  }, [settings.azureVoice, setSettings]);
 
   const handleAddToVocab = (entry: WordEntry) => {
     setVocab((currentVocab) => {
@@ -51,9 +60,7 @@ function App() {
 
   const handleRemoveFromVocab = (ids: string[]) => {
     setVocab((currentVocab) => {
-        // Create a Set of IDs to remove for O(1) lookup
         const idSet = new Set(ids);
-        // Return a new array containing only items whose ID is NOT in the set
         return currentVocab.filter(v => !idSet.has(v.id));
     });
   };
@@ -89,11 +96,6 @@ function App() {
   return (
     <div className="min-h-screen flex flex-col selection:bg-blue-100 selection:text-blue-900 dark:selection:bg-blue-900 dark:selection:text-blue-100">
       {/* Navbar: Apple style blurred sticky header */}
-      {/* 
-        Fix for iPhone PWA/Notch:
-        pt-[env(safe-area-inset-top)] ensures content starts below the status bar/Dynamic Island
-        The background (glass-panel) will stretch to the top edge.
-      */}
       <nav className="sticky top-0 z-50 glass-panel border-b border-gray-200/50 dark:border-white/10 pt-[env(safe-area-inset-top)] transition-all">
         <div className="max-w-5xl mx-auto px-6">
           <div className="flex items-center justify-between h-14">

@@ -37,6 +37,9 @@ export interface AppSettings {
   azureKey: string;
   azureRegion: string;
   azureVoice: string;
+
+  // Browser TTS Specific
+  browserVoice: string; // ID/URI of the browser voice
 }
 
 export enum Tab {

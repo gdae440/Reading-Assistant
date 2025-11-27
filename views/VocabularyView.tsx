@@ -1,4 +1,3 @@
-
 import React, { useState, useMemo } from 'react';
 import { WordEntry, HistoryEntry } from '../types';
 
@@ -70,12 +69,10 @@ export const VocabularyView: React.FC<Props> = ({ vocab, history, onRemove }) =>
     let csvContent = "";
 
     selectedEntries.forEach(item => {
-      // 1. Clean sentence quotes
       const cleanSentence = item.contextSentence 
         ? item.contextSentence.trim().replace(/^['"“]+|['"”]+$/g, '') 
         : '';
 
-      // 2. Use Inline Styles to prevent CSV splitting issues
       const frontHtml = `
         <div style="padding: 20px; text-align: center; font-family: system-ui, -apple-system, sans-serif;">
             <div style="font-size: 32px; font-weight: bold; margin-bottom: 10px;">${item.word}</div>

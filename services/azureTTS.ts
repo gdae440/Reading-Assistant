@@ -7,11 +7,10 @@ export const AZURE_VOICES = [
     { label: "🇺🇸 英文 (美) - Brian (男)", value: "en-US-BrianNeural" },
 
     // English (UK)
-    // Ollie removed due to stability issues
     { label: "🇬🇧 英文 (英) - Ryan (男)", value: "en-GB-RyanNeural" },
+    { label: "🇬🇧 英文 (英) - Libby (女)", value: "en-GB-LibbyNeural" },
     { label: "🇬🇧 英文 (英) - Sonia (女)", value: "en-GB-SoniaNeural" },
     { label: "🇬🇧 英文 (英) - Abbi (女)", value: "en-GB-AbbiNeural" },
-    { label: "🇬🇧 英文 (英) - Libby (女)", value: "en-GB-LibbyNeural" },
 
     // Russian
     { label: "🇷🇺 俄文 - Svetlana (女)", value: "ru-RU-SvetlanaNeural" },
@@ -48,13 +47,12 @@ export class AzureTTSService {
   async generateSpeech(text: string, voiceName: string, speed: number): Promise<ArrayBuffer> {
     const url = `https://${this.region}.tts.speech.microsoft.com/cognitiveservices/v1`;
     
-    // Extract language from voice name (e.g., "en-US" from "en-US-AvaMultilingualNeural")
-    // Default to en-US if parsing fails
+    // Extract language from voice name
     const langMatch = voiceName.match(/^([a-z]{2}-[A-Z]{2})/);
     const lang = langMatch ? langMatch[1] : 'en-US';
 
     // SSML to control voice and speed
-    // Logic update: If speed is 1.0, do NOT use <prosody>. This fixes compatibility with voices like Ollie.
+    // Logic update: If speed is 1.0, do NOT use <prosody>. This fixes compatibility with certain voices.
     let content = text;
     if (speed !== 1) {
         const percentage = Math.round((speed - 1) * 100);
@@ -77,7 +75,6 @@ export class AzureTTSService {
           'Ocp-Apim-Subscription-Key': this.key,
           'Content-Type': 'application/ssml+xml',
           'X-Microsoft-OutputFormat': 'audio-16khz-128kbitrate-mono-mp3'
-          // Removed 'User-Agent' to avoid CORS issues in browser
         },
         body: ssml
       });
