@@ -749,8 +749,8 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
             </div>
         </div>
 
-        {/* Main Text Area - PADDING & SPACER ADJUSTMENT */}
-        <div className="flex-1 overflow-y-auto p-4 md:p-6">
+        {/* Main Text Area - INCREASED PADDING & SPACER */}
+        <div className="flex-1 overflow-y-auto p-4 md:p-6 pb-96">
             <div className={`bg-white dark:bg-[#1c1c1e] rounded-3xl shadow-sm border border-gray-100 dark:border-white/5 p-6 md:p-8 min-h-[60vh] relative transition-all duration-500 ${isBlindMode ? 'blur-md opacity-60 select-none' : ''}`}>
                 {isReaderMode ? (
                     <div className="prose dark:prose-invert max-w-none">
