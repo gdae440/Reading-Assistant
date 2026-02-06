@@ -4,7 +4,16 @@ export default async function handler(
   request: VercelRequest,
   response: VercelResponse
 ) {
-  const { path } = request.query;
+  // 从URL路径中提取硅流动API路径
+  // 原始请求: /api/siliconflow/chat/completions
+  // 我们需要提取: chat/completions
+  const urlPath = request.url || '';
+  const match = urlPath.match(/\/api\/siliconflow\/(.+)/);
+  const path = match ? match[1] : '';
+
+  if (!path) {
+    return response.status(400).json({ error: 'Invalid path' });
+  }
 
   // 从 Authorization header 获取 API Key
   const authHeader = request.headers['authorization'];
