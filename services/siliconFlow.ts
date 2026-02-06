@@ -1,7 +1,7 @@
 
 import { LookupResult, AnalysisResult } from "../types";
 
-const BASE_URL = "/api/siliconflow";
+const BASE_URL = "https://api.siliconflow.cn/v1";
 
 export class SiliconFlowService {
   private apiKey: string;
