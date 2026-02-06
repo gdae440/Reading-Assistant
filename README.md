@@ -1,20 +1,36 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# 跟读助手
 
-# Run and deploy your AI Studio app
+一个语言学习辅助工具，支持多语言（TTS）朗读、单词查询、生词本管理。
 
-This contains everything you need to run your app locally.
+## 功能特性
 
-View your app in AI Studio: https://ai.studio/apps/drive/1EQU6gmOwArVYIgyn5YQeue9zf7OcPAwr
+- **多引擎 TTS**: 支持浏览器内置语音、SiliconFlow (CosyVoice2)、Azure AI
+- **智能语言检测**: 自动识别中日俄英四种语言
+- **单词查询**: AI 释义 + 例句生成
+- **生词本**: 收藏并管理生词
+- **跟读模式**: 逐句朗读练习
 
-## Run Locally
+## 运行方式
 
-**Prerequisites:**  Node.js
+**前置要求:** Node.js
 
+1. 安装依赖:
+   ```bash
+   npm install
+   ```
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+2. 配置 API Key (在 [.env.local](.env.local)):
+   - `GEMINI_API_KEY` - 保留用于环境变量兼容（当前使用 SiliconFlow API）
+   - `SILICONFLOW_API_KEY` - SiliconFlow API Key
+
+3. 启动开发服务器:
+   ```bash
+   npm run dev
+   ```
+
+## 技术栈
+
+- React + TypeScript + Vite
+- Web Speech API (浏览器 TTS)
+- SiliconFlow API (CosyVoice2 TTS)
+- Azure AI Speech (TTS)
