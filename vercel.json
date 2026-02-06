@@ -1,23 +1,12 @@
 {
   "version": 2,
-  "builds": [
+  "framework": null,
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "rewrites": [
     {
-      "src": "package.json",
-      "use": "@vercel/static-build"
-    },
-    {
-      "src": "api/**/*.ts",
-      "use": "@vercel/node"
-    }
-  ],
-  "routes": [
-    {
-      "src": "/api/siliconflow/(.*)",
-      "dest": "https://api.siliconflow.cn/v1/$1"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "/$1"
+      "source": "/api/siliconflow/:path*",
+      "destination": "/api/proxy/:path*"
     }
   ]
 }
