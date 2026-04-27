@@ -28,21 +28,58 @@ const DEFAULT_SETTINGS: AppSettings = {
   azureVoice: 'en-US-AvaMultilingualNeural',
 
   // Browser Defaults
-  browserVoice: '' // Empty means "System Default"
+  browserVoice: '', // Empty means "System Default"
+  edgeVoice: 'en-US-AvaMultilingualNeural'
+};
+
+const DEFAULT_SECRET_KEYS = {
+  apiKey: '',
+  azureKey: ''
 };
 
 function App() {
   const [activeTab, setActiveTab] = useState<Tab>(Tab.READER);
-  const [settings, setSettings] = useLocalStorage<AppSettings>('polyglot_settings', DEFAULT_SETTINGS);
+  const [storedSettings, setStoredSettings] = useLocalStorage<AppSettings>('polyglot_settings', DEFAULT_SETTINGS);
+  const [secretKeys, setSecretKeys] = useLocalStorage<typeof DEFAULT_SECRET_KEYS>('polyglot_secret_keys', DEFAULT_SECRET_KEYS);
   const [vocab, setVocab] = useLocalStorage<WordEntry[]>('polyglot_vocab', []);
   const [history, setHistory] = useLocalStorage<HistoryEntry[]>('polyglot_history', []);
+  const settings: AppSettings = { ...DEFAULT_SETTINGS, ...storedSettings, ...secretKeys };
+
+  const handleSettingsChange = (nextSettings: AppSettings | ((prev: AppSettings) => AppSettings)) => {
+    const resolved = typeof nextSettings === 'function' ? nextSettings(settings) : nextSettings;
+    const { apiKey, azureKey, ...safeSettings } = resolved;
+    setSecretKeys({ apiKey, azureKey });
+    setStoredSettings({ ...safeSettings, apiKey: '', azureKey: '' });
+  };
+
+  const handleClearKeys = () => {
+    setSecretKeys(DEFAULT_SECRET_KEYS);
+    setStoredSettings(prev => ({ ...prev, apiKey: '', azureKey: '' }));
+  };
+
+  // Migrate keys that older versions stored inside the general settings object.
+  useEffect(() => {
+    if (!storedSettings.apiKey && !storedSettings.azureKey) return;
+
+    setSecretKeys(prev => ({
+      apiKey: prev.apiKey || storedSettings.apiKey,
+      azureKey: prev.azureKey || storedSettings.azureKey
+    }));
+    setStoredSettings(prev => ({ ...prev, apiKey: '', azureKey: '' }));
+  }, [storedSettings.apiKey, storedSettings.azureKey, setSecretKeys, setStoredSettings]);
 
   // Migration Effect: Fix broken voices (e.g., Ollie) for existing users
   useEffect(() => {
     if (settings.azureVoice === 'en-GB-OllieNeural') {
-        setSettings(prev => ({ ...prev, azureVoice: 'en-GB-RyanNeural' }));
+        handleSettingsChange(prev => ({ ...prev, azureVoice: 'en-GB-RyanNeural' }));
     }
-  }, [settings.azureVoice, setSettings]);
+  }, [settings.azureVoice]);
+
+  useEffect(() => {
+    if ((settings.ttsProvider as string) === 'browser-cloud') {
+      handleSettingsChange(prev => ({ ...prev, ttsProvider: 'edge' }));
+    }
+  }, [settings.ttsProvider]);
 
   const handleAddToVocab = (entry: WordEntry) => {
     setVocab((currentVocab) => {
@@ -84,14 +121,14 @@ function App() {
                 settings={settings} 
                 onAddToVocab={handleAddToVocab} 
                 onUpdateVocabEntry={handleUpdateVocabEntry}
-                onSettingsChange={setSettings}
+                onSettingsChange={handleSettingsChange}
                 onAddToHistory={handleAddToHistory}
             />
         );
       case Tab.VOCABULARY:
         return <VocabularyView vocab={vocab} history={history} onRemove={handleRemoveFromVocab} />;
       case Tab.SETTINGS:
-        return <SettingsView settings={settings} onSave={setSettings} />;
+        return <SettingsView settings={settings} onSave={handleSettingsChange} onClearKeys={handleClearKeys} />;
       default:
         return null;
     }

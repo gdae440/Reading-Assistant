@@ -5,11 +5,20 @@ import { AppSettings, TTSProvider } from '../types';
 interface Props {
   settings: AppSettings;
   onSave: (settings: AppSettings) => void;
+  onClearKeys: () => void;
 }
 
-export const SettingsView: React.FC<Props> = ({ settings, onSave }) => {
+export const SettingsView: React.FC<Props> = ({ settings, onSave, onClearKeys }) => {
   const handleChange = (key: keyof AppSettings, value: any) => {
     onSave({ ...settings, [key]: value });
+  };
+
+  const hasSavedKeys = Boolean(settings.apiKey || settings.azureKey);
+  const providerLabels: Record<TTSProvider, string> = {
+    siliconflow: 'SiliconFlow',
+    azure: 'Azure',
+    browser: '本地',
+    edge: 'Edge 免费'
   };
 
   return (
@@ -20,18 +29,43 @@ export const SettingsView: React.FC<Props> = ({ settings, onSave }) => {
         {/* API Section */}
         <div className="bg-white dark:bg-[#1c1c1e] rounded-2xl shadow-[0_2px_15px_rgb(0,0,0,0.02)] border border-gray-100 dark:border-white/10 overflow-hidden transition-colors">
           <div className="px-6 py-4 border-b border-gray-50 dark:border-white/5">
-            <h3 className="text-base font-semibold text-gray-900 dark:text-white">SiliconFlow API</h3>
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-base font-semibold text-gray-900 dark:text-white">API Key</h3>
+              <span className={`text-[11px] font-semibold px-2 py-1 rounded-full ${
+                hasSavedKeys
+                  ? 'bg-green-50 text-green-700 dark:bg-green-900/20 dark:text-green-300'
+                  : 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400'
+              }`}>
+                {hasSavedKeys ? '已保存到本机浏览器' : '未保存'}
+              </span>
+            </div>
           </div>
-          <div className="p-6">
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">API Key</label>
-            <input
-              type="password"
-              value={settings.apiKey}
-              onChange={(e) => handleChange('apiKey', e.target.value)}
-              placeholder="sk-..."
-              className="w-full px-4 py-2.5 bg-gray-50 dark:bg-gray-800 border-0 rounded-xl focus:ring-2 focus:ring-blue-500/20 text-gray-800 dark:text-white placeholder-gray-400 dark:placeholder-gray-600 transition-all"
-            />
-            <p className="text-xs text-gray-500 dark:text-gray-500 mt-2">用于 AI 翻译、OCR、查词和 SiliconFlow 语音。</p>
+          <div className="p-6 space-y-5">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">SiliconFlow Key</label>
+              <input
+                type="password"
+                value={settings.apiKey}
+                onChange={(e) => handleChange('apiKey', e.target.value)}
+                placeholder="sk-..."
+                autoComplete="off"
+                spellCheck={false}
+                className="w-full px-4 py-2.5 bg-gray-50 dark:bg-gray-800 border-0 rounded-xl focus:ring-2 focus:ring-blue-500/20 text-gray-800 dark:text-white placeholder-gray-400 dark:placeholder-gray-600 transition-all"
+              />
+              <p className="text-xs text-gray-500 dark:text-gray-500 mt-2">用于 AI 翻译、OCR、查词和 SiliconFlow 语音。</p>
+            </div>
+
+            <div className="rounded-xl border border-amber-100 dark:border-amber-500/20 bg-amber-50/70 dark:bg-amber-900/10 p-4 text-xs leading-relaxed text-amber-800 dark:text-amber-200">
+              Key 会保存在当前浏览器本机，方便下次直接使用。请勿在公共设备或不可信浏览器中保存自己的 Key。
+            </div>
+
+            <button
+              onClick={onClearKeys}
+              disabled={!hasSavedKeys}
+              className="px-4 py-2 text-sm font-medium rounded-xl border border-red-100 dark:border-red-900/30 text-red-600 dark:text-red-300 bg-red-50 dark:bg-red-900/10 hover:bg-red-100 dark:hover:bg-red-900/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              清除本机保存的 Key
+            </button>
           </div>
         </div>
 
@@ -73,7 +107,7 @@ export const SettingsView: React.FC<Props> = ({ settings, onSave }) => {
                 <div>
                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">语音引擎</label>
                    <div className="flex p-1 bg-gray-100 dark:bg-gray-800 rounded-xl overflow-x-auto">
-                       {(['siliconflow', 'azure', 'browser'] as TTSProvider[]).map((provider) => (
+                       {(['siliconflow', 'azure', 'browser', 'edge'] as TTSProvider[]).map((provider) => (
                            <button
                                key={provider}
                                onClick={() => handleChange('ttsProvider', provider)}
@@ -83,8 +117,7 @@ export const SettingsView: React.FC<Props> = ({ settings, onSave }) => {
                                    : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
                                }`}
                            >
-                               {provider === 'siliconflow' ? 'SiliconFlow' :
-                                provider === 'azure' ? 'Azure' : '本地'}
+                               {providerLabels[provider]}
                            </button>
                        ))}
                    </div>
@@ -167,6 +200,8 @@ export const SettingsView: React.FC<Props> = ({ settings, onSave }) => {
                                 value={settings.azureKey}
                                 onChange={(e) => handleChange('azureKey', e.target.value)}
                                 placeholder="输入 Azure Speech 资源密钥"
+                                autoComplete="off"
+                                spellCheck={false}
                                 className="w-full px-4 py-2.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-blue-500/20 text-gray-800 dark:text-white"
                             />
                         </div>
@@ -179,7 +214,18 @@ export const SettingsView: React.FC<Props> = ({ settings, onSave }) => {
                 {/* Browser Config */}
                 {settings.ttsProvider === 'browser' && (
                     <div className="p-4 bg-gray-50 dark:bg-gray-800 rounded-xl text-sm text-gray-600 dark:text-gray-400 border border-gray-100 dark:border-gray-700">
-                        使用浏览器内置的语音引擎（Google/Microsoft/Apple），无需额外配置 API。
+                        使用浏览器或系统本机语音，免 Key，优先离线可用。高质量声音通常需要先在系统设置中下载。
+                    </div>
+                )}
+
+                {settings.ttsProvider === 'edge' && (
+                    <div className="space-y-3 p-4 bg-orange-50 dark:bg-orange-900/10 rounded-xl text-sm text-orange-800 dark:text-orange-200 border border-orange-100 dark:border-orange-500/20">
+                        <p>
+                            使用非官方 Edge Read Aloud 云端语音，免用户 Key。前端会请求本项目的 <span className="font-mono">/api/edge-tts</span>，由本地 dev middleware 或 Vercel Function 转发合成。
+                        </p>
+                        <p className="text-xs text-orange-700/80 dark:text-orange-200/80">
+                            这是实验方案：音质好、成本低，但不是微软公开 API，可能因微软协议变化而失效。
+                        </p>
                     </div>
                 )}
             </div>

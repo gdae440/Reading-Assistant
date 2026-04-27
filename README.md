@@ -4,7 +4,7 @@
 
 ## 功能特性
 
-- **多引擎 TTS**: 支持浏览器内置语音、SiliconFlow (CosyVoice2)、Azure AI
+- **多引擎 TTS**: 支持浏览器本地语音、SiliconFlow (CosyVoice2)、Azure AI、Edge 免费云端实验模式
 - **智能语言检测**: 自动识别中日俄英四种语言
 - **单词查询**: AI 释义 + 例句生成
 - **生词本**: 收藏并管理生词
@@ -19,9 +19,11 @@
    npm install
    ```
 
-2. 配置 API Key (在 [.env.local](.env.local)):
-   - `GEMINI_API_KEY` - 保留用于环境变量兼容（当前使用 SiliconFlow API）
-   - `SILICONFLOW_API_KEY` - SiliconFlow API Key
+2. 启动后在应用“设置”里填写自己的 API Key:
+   - SiliconFlow Key 用于 AI 翻译、OCR、查词和 SiliconFlow 语音
+   - Azure Speech Key 为可选项，仅在选择 Azure TTS 时需要
+   - Edge 免费云端模式不需要用户 Key，但会通过本项目 `/api/edge-tts` 转发到非官方 Edge Read Aloud 服务
+   - Key 只保存在当前浏览器本机，不需要配置 `.env.local`
 
 3. 启动开发服务器:
    ```bash
@@ -34,3 +36,4 @@
 - Web Speech API (浏览器 TTS)
 - SiliconFlow API (CosyVoice2 TTS)
 - Azure AI Speech (TTS)
+- Edge Read Aloud 非官方 TTS 兼容接口 (`/api/edge-tts`)

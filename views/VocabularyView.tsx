@@ -67,36 +67,49 @@ export const VocabularyView: React.FC<Props> = ({ vocab, history, onRemove }) =>
     if (selectedEntries.length === 0) return;
 
     let csvContent = "";
+    const escapeHtml = (value: string) =>
+      value
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
 
     selectedEntries.forEach(item => {
       const cleanSentence = item.contextSentence 
         ? item.contextSentence.trim().replace(/^['"“]+|['"”]+$/g, '') 
         : '';
+      const safeWord = escapeHtml(item.word);
+      const safeIpa = item.ipa ? escapeHtml(item.ipa) : '';
+      const safeReading = item.reading ? escapeHtml(item.reading) : '';
+      const safeSentence = cleanSentence ? escapeHtml(cleanSentence) : '';
+      const safeMeaningCn = item.meaningCn ? escapeHtml(item.meaningCn) : '';
+      const safeMeaningRu = item.meaningRu ? escapeHtml(item.meaningRu) : '';
 
       const frontHtml = `
         <div style="padding: 20px; text-align: center; font-family: system-ui, -apple-system, sans-serif;">
-            <div style="font-size: 32px; font-weight: bold; margin-bottom: 10px;">${item.word}</div>
-            ${item.ipa ? `<div style="font-family: monospace; font-size: 16px; opacity: 0.6; margin-bottom: 20px;">/${item.ipa}/</div>` : ''}
-            ${item.reading ? `<div style="font-size: 16px; opacity: 0.6; margin-bottom: 20px;">(${item.reading})</div>` : ''}
-            ${cleanSentence ? `
+            <div style="font-size: 32px; font-weight: bold; margin-bottom: 10px;">${safeWord}</div>
+            ${safeIpa ? `<div style="font-family: monospace; font-size: 16px; opacity: 0.6; margin-bottom: 20px;">/${safeIpa}/</div>` : ''}
+            ${safeReading ? `<div style="font-size: 16px; opacity: 0.6; margin-bottom: 20px;">(${safeReading})</div>` : ''}
+            ${safeSentence ? `
             <div style="font-size: 18px; line-height: 1.5; font-style: italic; opacity: 0.85; margin-top: 20px; border-top: 1px solid rgba(127,127,127,0.2); padding-top: 15px;">
-                "${cleanSentence}"
+                "${safeSentence}"
             </div>` : ''}
         </div>
       `.replace(/[\r\n]+/g, ' ').trim();
 
       const backHtml = `
         <div style="padding: 20px; text-align: left; font-family: system-ui, -apple-system, sans-serif;">
-            ${item.meaningCn ? `
+            ${safeMeaningCn ? `
             <div style="margin-bottom: 20px;">
                 <div style="font-size: 12px; font-weight: bold; text-transform: uppercase; opacity: 0.5; margin-bottom: 4px;">中文释义</div>
-                <div style="font-size: 18px; line-height: 1.4;">${item.meaningCn}</div>
+                <div style="font-size: 18px; line-height: 1.4;">${safeMeaningCn}</div>
             </div>` : ''}
             
-            ${item.meaningRu ? `
+            ${safeMeaningRu ? `
             <div style="margin-bottom: 20px;">
                 <div style="font-size: 12px; font-weight: bold; text-transform: uppercase; opacity: 0.5; margin-bottom: 4px;">俄语释义</div>
-                <div style="font-size: 18px; line-height: 1.4;">${item.meaningRu}</div>
+                <div style="font-size: 18px; line-height: 1.4;">${safeMeaningRu}</div>
             </div>` : ''}
         </div>
       `.replace(/[\r\n]+/g, ' ').trim();

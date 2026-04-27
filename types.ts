@@ -18,7 +18,7 @@ export interface HistoryEntry {
   timestamp: number;
 }
 
-export type TTSProvider = 'siliconflow' | 'azure' | 'browser';
+export type TTSProvider = 'siliconflow' | 'azure' | 'browser' | 'edge';
 
 export interface AppSettings {
   apiKey: string; // SiliconFlow Key
@@ -44,6 +44,10 @@ export interface AppSettings {
 
   // Browser TTS Specific
   browserVoice: string; // ID/URI of the browser voice
+
+  // Edge Read Aloud compatible cloud TTS (unofficial, server-side proxy)
+  edgeVoice: string;
+  browserCloudVoice?: string; // Legacy setting from the old browser-cloud mode
 }
 
 export enum Tab {

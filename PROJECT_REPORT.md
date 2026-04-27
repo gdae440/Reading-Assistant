@@ -1,6 +1,6 @@
 # 跟读助手 (PolyGlot Reader) 项目详细报告
 
-> 最后更新: 2026-02-06
+> 最后更新: 2026-04-28
 
 ---
 
@@ -11,9 +11,9 @@
 | 属性 | 详情 |
 |------|------|
 | **项目名称** | 跟读助手 (PolyGlot Reader) |
-| **技术栈** | React 19.2.0 + TypeScript 5.8 + Vite 6.2 + TailwindCSS |
+| **技术栈** | React 19.2.0 + TypeScript 5.8 + Vite + TailwindCSS |
 | **目标平台** | 移动端 Web / PWA（针对 iOS/Android 优化） |
-| **构建工具** | Vite 6.2.0 |
+| **构建工具** | Vite |
 
 ---
 
@@ -21,9 +21,9 @@
 
 ```
 跟读助手/
-├── .env.local              # 环境变量（GEMINI_API_KEY）
 ├── .gitignore              # Git 忽略配置
-├── index.html              # HTML 入口（含 Tailwind CDN）
+├── index.html              # HTML 入口
+├── index.css               # Tailwind 与全局样式
 ├── index.tsx               # React 渲染入口
 ├── App.tsx                 # 主应用组件（路由/状态管理）
 ├── types.ts                # TypeScript 类型定义
@@ -41,7 +41,12 @@
 ├── services/
 │   ├── siliconFlow.ts      # SiliconFlow AI 服务（核心）
 │   ├── azureTTS.ts         # Azure 语音合成服务
-│   └── googleTTS.ts        # Google 免费 TTS 服务
+│   └── edgeTTSClient.ts    # Edge 免费云端 TTS 前端客户端
+├── server/
+│   ├── edgeTTS.ts          # Edge 非官方 TTS server-only 合成逻辑
+│   └── edgeTTSDevMiddleware.ts # Vite 开发环境 /api/edge-tts
+├── api/
+│   └── edge-tts.ts         # Vercel Function: /api/edge-tts
 └── hooks/
     └── useLocalStorage.ts   # 本地存储 Hook
 ```
@@ -81,7 +86,7 @@
 | **SiliconFlow API Key** | 核心 API 认证 |
 | **LLM 模型** | 默认: DeepSeek-V3.2-Exp |
 | **Vision 模型** | 默认: Qwen3-VL-32B |
-| **TTS 提供商** | SiliconFlow / Azure / Google / 浏览器 |
+| **TTS 提供商** | SiliconFlow / Azure / 浏览器本地 / Edge 免费云端 |
 | **跟读模式** | 开关和间隔时间设置 |
 
 ---
@@ -94,7 +99,7 @@
 |------|------|------|------|
 | **SiliconFlow TTS** | CosyVoice2/IndexTTS | 支持音色选择，返回 MP3 | [services/siliconFlow.ts](services/siliconFlow.ts) |
 | **Azure TTS** | Azure Speech Services | 30+ 种神经网络音色，SSML 控制 | [services/azureTTS.ts](services/azureTTS.ts) |
-| **Google TTS** | Google Translate TTS | 免费接口，智能长文本分块 (<180 字符) | [services/googleTTS.ts](services/googleTTS.ts) |
+| **Edge 免费云端** | 非官方 Edge Read Aloud 兼容接口 | 免用户 Key，经 `/api/edge-tts` server-side 转发，实验性质 | [server/edgeTTS.ts](server/edgeTTS.ts), [api/edge-tts.ts](api/edge-tts.ts) |
 | **浏览器原生** | window.speechSynthesis | iOS 优化，无需 API | ReaderView 内置 |
 
 ### TTS 音色支持
@@ -108,6 +113,10 @@
 - 俄语: Svetlana, Dariya, Dmitry, Donat
 - 日语: Nanami, Keita
 - 中文: Xiaoxiao, Yunxi
+
+**Edge 免费云端:**
+- 使用 Edge Read Aloud 风格 Neural 音色，不需要用户 Key。
+- 不是微软公开 API，可能因服务协议变化而失效；前端不能直接稳定调用，必须走 server-side `/api/edge-tts`。
 
 ### AI 服务 ([services/siliconFlow.ts](services/siliconFlow.ts))
 
@@ -173,6 +182,9 @@ interface AppSettings {
 
   // 浏览器 TTS
   browserVoice: string;
+
+  // Edge 免费云端 TTS
+  edgeVoice: string;
 }
 ```
 
@@ -226,11 +238,9 @@ npm run build    # 构建生产版本
 npm run preview  # 预览构建结果
 ```
 
-### 环境变量 (.env.local)
+### API Key 管理
 
-```
-GEMINI_API_KEY=PLACEHOLDER_API_KEY
-```
+用户在应用“设置”里填写自己的 SiliconFlow 或 Azure Key。Key 只保存在当前浏览器本机，不再通过 Vite 环境变量注入前端产物。
 
 ---
 
@@ -240,7 +250,7 @@ GEMINI_API_KEY=PLACEHOLDER_API_KEY
 |------|--------|------|----------|
 | **SiliconFlow** | 必需 | AI 翻译、查词、OCR、TTS | SettingsView |
 | Azure Speech | 可选 | 高质量语音合成 | SettingsView |
-| Google TTS | 可选 | 免费语音合成 (无需 API Key) | - |
+| Edge 免费云端 | 可选 | 非官方 Edge Read Aloud 云端语音 (无需用户 Key) | `/api/edge-tts` |
 | 浏览器 TTS | 可选 | 原生语音合成 (无需 API Key) | - |
 
 **SiliconFlow API Base URL:** `https://api.siliconflow.cn/v1`
@@ -253,17 +263,12 @@ GEMINI_API_KEY=PLACEHOLDER_API_KEY
 
 ```typescript
 export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, '.', '');
   return {
     server: {
       port: 3000,
-      host: '0.0.0.0',
+      host: '127.0.0.1',
     },
     plugins: [react()],
-    define: {
-      'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
-      'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY)
-    },
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
@@ -338,6 +343,8 @@ npm run dev
 | [views/SettingsView.tsx](views/SettingsView.tsx) | 设置界面 |
 | [services/siliconFlow.ts](services/siliconFlow.ts) | AI 服务集成 |
 | [services/azureTTS.ts](services/azureTTS.ts) | Azure 语音合成 |
-| [services/googleTTS.ts](services/googleTTS.ts) | Google 免费 TTS |
+| [services/edgeTTSClient.ts](services/edgeTTSClient.ts) | Edge 免费云端 TTS 前端客户端 |
+| [server/edgeTTS.ts](server/edgeTTS.ts) | Edge 非官方 TTS server-only 合成逻辑 |
+| [api/edge-tts.ts](api/edge-tts.ts) | Vercel Function 语音合成入口 |
 | [hooks/useLocalStorage.ts](hooks/useLocalStorage.ts) | 本地存储 |
 | [types.ts](types.ts) | 类型定义 |

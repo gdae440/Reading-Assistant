@@ -45,6 +45,10 @@ export class AzureTTSService {
   }
 
   async generateSpeech(text: string, voiceName: string, speed: number): Promise<ArrayBuffer> {
+    if (!/^[a-z0-9-]+$/i.test(this.region)) {
+      throw new Error("Azure 区域格式无效");
+    }
+
     const url = `https://${this.region}.tts.speech.microsoft.com/cognitiveservices/v1`;
     
     // Extract language from voice name
@@ -53,16 +57,27 @@ export class AzureTTSService {
 
     // SSML to control voice and speed
     // Logic update: If speed is 1.0, do NOT use <prosody>. This fixes compatibility with certain voices.
-    let content = text;
+    const escapeXml = (value: string) =>
+      value
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&apos;');
+
+    const safeText = escapeXml(text);
+    const safeLang = escapeXml(lang);
+    const safeVoiceName = escapeXml(voiceName);
+    let content = safeText;
     if (speed !== 1) {
         const percentage = Math.round((speed - 1) * 100);
         const rateStr = `${percentage > 0 ? '+' : ''}${percentage}%`;
-        content = `<prosody rate='${rateStr}'>${text}</prosody>`;
+        content = `<prosody rate='${escapeXml(rateStr)}'>${safeText}</prosody>`;
     }
 
     const ssml = `
-      <speak version='1.0' xml:lang='${lang}'>
-        <voice xml:lang='${lang}' name='${voiceName}'>
+      <speak version='1.0' xml:lang='${safeLang}'>
+        <voice xml:lang='${safeLang}' name='${safeVoiceName}'>
           ${content}
         </voice>
       </speak>

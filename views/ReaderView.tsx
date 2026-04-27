@@ -3,7 +3,7 @@ import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { AppSettings, WordEntry, HistoryEntry, LookupResult, AnalysisResult } from '../types';
 import { SiliconFlowService } from '../services/siliconFlow';
 import { AzureTTSService, AZURE_VOICES } from '../services/azureTTS';
-import { GoogleFreeTTS } from '../services/googleTTS';
+import { EdgeCloudTTSService, EDGE_TTS_VOICES } from '../services/edgeTTSClient';
 import { WordDetailModal } from '../components/WordDetailModal';
 import { useLocalStorage } from '../hooks/useLocalStorage';
 
@@ -32,7 +32,7 @@ const useBrowserVoices = () => {
         const update = () => {
             const allVoices = window.speechSynthesis.getVoices();
             setVoices(allVoices || []);
-            setIsLoading(false);
+            if (allVoices.length > 0) setIsLoading(false);
         };
 
         // 立即尝试获取
@@ -46,12 +46,12 @@ const useBrowserVoices = () => {
         const interval = setInterval(() => {
             attempts++;
             const allVoices = window.speechSynthesis.getVoices();
-            if (allVoices && allVoices.length > 0 && allVoices.length !== voices.length) {
+            if (allVoices && allVoices.length > 0) {
                 setVoices(allVoices);
                 setIsLoading(false);
                 clearInterval(interval);
             }
-            if (attempts > 10) {
+            if (attempts > 20) {
                 setIsLoading(false);
                 clearInterval(interval);
             }
@@ -65,6 +65,31 @@ const useBrowserVoices = () => {
 
     return { voices, isLoading };
 };
+
+const isNoveltyVoice = (voice: SpeechSynthesisVoice): boolean => {
+    const name = voice.name.toLowerCase();
+    return [
+        'bad news', 'bahh', 'bells', 'boing', 'bubbles', 'cellos', 'deranged',
+        'good news', 'hysterical', 'jester', 'organ', 'superstar', 'trinoids',
+        'whisper', 'zarvox'
+    ].some(blocked => name.includes(blocked));
+};
+
+const browserLangMatches = (voiceLang: string, detectedLang: string): boolean => {
+    const lang = voiceLang.toLowerCase();
+    if (!lang) return false;
+
+    if (detectedLang === 'zh') {
+        if (lang === 'zh-hk' || lang === 'yue-hk' || lang === 'zh-tw') return false;
+        return lang.startsWith('zh-cn') || lang.startsWith('zh');
+    }
+    if (detectedLang === 'ja') return lang.startsWith('ja');
+    if (detectedLang === 'ru') return lang.startsWith('ru');
+    return lang === 'en-gb' || lang === 'en-us' || lang.startsWith('en-');
+};
+
+const isBrowserProvider = (provider: AppSettings['ttsProvider']) =>
+    provider === 'browser';
 
 // Image Compression Helper
 const compressImage = (file: File): Promise<string> => {
@@ -113,6 +138,24 @@ const splitTextIntoSentences = (text: string): string[] => {
     return text.match(/[^.!?。！？\n\r]+[.!?。！？\n\r]*|[\n\r]+/g) || [text];
 };
 
+const splitBrowserSpeechSegments = (text: string): string[] => {
+    const result: string[] = [];
+    const sentences = splitTextIntoSentences(text).map(s => s.trim()).filter(Boolean);
+
+    for (const sentence of sentences) {
+        if (sentence.length <= 180) {
+            result.push(sentence);
+            continue;
+        }
+
+        for (let i = 0; i < sentence.length; i += 160) {
+            result.push(sentence.slice(i, i + 160));
+        }
+    }
+
+    return result.length > 0 ? result : [text];
+};
+
 interface Props {
   settings: AppSettings;
   onAddToVocab: (entry: WordEntry) => void;
@@ -148,7 +191,6 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
   const [selRange, setSelRange] = useState({ start: 0, end: 0 });
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const googleTTS = useRef(new GoogleFreeTTS());
   const { voices: browserVoices, isLoading: voicesLoading } = useBrowserVoices();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -157,12 +199,21 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
   const audioCache = useRef<Map<string, string>>(new Map());
   const isFetchingAudio = useRef(false);
   const isStoppedRef = useRef(false); // To break the shadowing loop
+  const ttsStatusRef = useRef<'idle' | 'loading' | 'playing' | 'paused'>('idle');
+  const playbackRevisionRef = useRef(0);
+  const activeSpeechResolveRef = useRef<(() => void) | null>(null);
+  const activeAudioResolveRef = useRef<(() => void) | null>(null);
   const isScrolling = useRef(false);
   const lastSelectionRef = useRef<string>("");
 
   const sfService = useMemo(() => new SiliconFlowService(settings.apiKey), [settings.apiKey]);
+  const edgeService = useMemo(() => new EdgeCloudTTSService(), []);
   const isApple = /Mac|iPhone|iPad|iPod/.test(navigator.platform) || /Mac|iPhone|iPad|iPod/.test(navigator.userAgent);
   const isAndroid = /Android/.test(navigator.userAgent);
+
+  useEffect(() => {
+    ttsStatusRef.current = ttsStatus;
+  }, [ttsStatus]);
 
   // Clean up Object URLs
   useEffect(() => {
@@ -186,55 +237,27 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
     return 'en';
   }, [inputText]);
 
-  // UI Voices Logic - 只显示标准的语音，Mac音效包（如Bubbles、Cellos）不要
+  // UI Voices Logic - 只显示标准的语音，Mac 音效包（如 Bubbles、Cellos）不要
   const uiVoices = useMemo(() => {
-    if (settings.ttsProvider !== 'browser') return [];
+    if (!isBrowserProvider(settings.ttsProvider)) return [];
 
-    let langKey = 'en';
-    if (detectedLang === 'zh') langKey = 'zh';
-    else if (detectedLang === 'ja') langKey = 'ja';
-    else if (detectedLang === 'ru') langKey = 'ru';
-
-    const langVoices = browserVoices.filter(v => {
-        // 排除苹果音效包：URI 以 com.apple.speech.synthesis.voice 开头
-        const uri = v.voiceURI || '';
-        if (uri.startsWith('com.apple.speech.synthesis.voice')) return false;
-
-        // 必须是本地语音
-        if (!v.localService) return false;
-
-        const voiceLang = v.lang.toLowerCase();
-
-        // 中文
-        if (langKey === 'zh') {
-            // 排除 zh-HK (粤语)
-            if (voiceLang === 'zh-hk' || voiceLang === 'yue-hk') return false;
-            // 排除 zh-TW (繁体) 如果用户只需要简体
-            if (voiceLang === 'zh-tw') return false;
-            return voiceLang.startsWith('zh-cn') || voiceLang.startsWith('zh-');
-        }
-        // 日语
-        if (langKey === 'ja') {
-            return voiceLang.startsWith('ja');
-        }
-        // 俄语
-        if (langKey === 'ru') {
-            return voiceLang.startsWith('ru');
-        }
-        // 英语：只保留英式 (en-GB) 和美式 (en-US)
-        if (langKey === 'en') {
-            return voiceLang === 'en-gb' || voiceLang === 'en-us';
-        }
-        return false;
+    const matchingVoices = browserVoices.filter(v => {
+        if (isNoveltyVoice(v)) return false;
+        return browserLangMatches(v.lang || '', detectedLang);
     });
+
+    const preferredVoices = matchingVoices.filter(v => v.localService);
+    const langVoices = preferredVoices.length > 0 ? preferredVoices : matchingVoices;
 
     // 质量评分：Premium/Enhanced > 普通
     const qualityScore = (v: SpeechSynthesisVoice): number => {
         let score = 0;
         const name = v.name.toLowerCase();
-        if (name.includes('premium')) score += 10;
-        if (name.includes('enhanced')) score += 10;
+        if (name.includes('premium')) score += 20;
+        if (name.includes('enhanced')) score += 15;
+        if (name.includes('neural')) score += 10;
         if (name.includes('siri')) score += 3;
+        if (v.localService) score += 1;
         return score;
     };
 
@@ -244,7 +267,7 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
     // 映射到选项
     const result = sortedVoices.map(v => ({
         value: v.voiceURI,
-        label: v.name
+        label: `${v.name}${v.localService ? '' : ' (在线)'}`
     }));
 
     return result;
@@ -284,6 +307,7 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
         setOcrStatus("正在优化排版...");
         const cleanText = await sfService.fixOCRFormatting(rawText, settings.llmModel);
 
+        stopTTSIfActive();
         setInputText(prev => prev + (prev ? "\n\n" : "") + cleanText);
     } catch (err) {
         alert("OCR 识别失败，请检查图片或网络");
@@ -369,22 +393,53 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
       cache.set(key, url);
   };
 
+  const beginTTSRun = () => {
+    const nextRevision = playbackRevisionRef.current + 1;
+    playbackRevisionRef.current = nextRevision;
+    isStoppedRef.current = false;
+    return nextRevision;
+  };
+
+  const isTTSRunCurrent = (revision: number) => {
+    return playbackRevisionRef.current === revision && !isStoppedRef.current;
+  };
+
   const stopTTS = () => {
+    playbackRevisionRef.current += 1;
     isStoppedRef.current = true;
+
+    activeSpeechResolveRef.current?.();
+    activeSpeechResolveRef.current = null;
+
+    activeAudioResolveRef.current?.();
+    activeAudioResolveRef.current = null;
+
     if (audioRef.current) {
+        audioRef.current.onended = null;
+        audioRef.current.onerror = null;
         audioRef.current.pause();
         audioRef.current.currentTime = 0;
+        audioRef.current = null;
     }
-    // 停止 Google TTS
-    googleTTS.current.stop();
     // 停止 Browser TTS
     window.speechSynthesis.cancel();
     setTtsStatus('idle');
     isFetchingAudio.current = false;
   };
 
+  const stopTTSIfActive = () => {
+    if (ttsStatusRef.current !== 'idle' || isFetchingAudio.current) {
+        stopTTS();
+    }
+  };
+
   const pauseTTS = () => {
-    // 暂停功能仅对 API TTS (Azure/SiliconFlow) 有效
+    if (isBrowserProvider(settings.ttsProvider)) {
+        window.speechSynthesis.pause();
+        setTtsStatus('paused');
+        return;
+    }
+
     if (audioRef.current && !audioRef.current.paused) {
         audioRef.current.pause();
         setTtsStatus('paused');
@@ -392,26 +447,72 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
   };
 
   const resumeTTS = () => {
-    // 继续功能仅对 API TTS (Azure/SiliconFlow) 有效
-    // 只需要检查 audioRef 是否存在且处于暂停状态
+    if (isBrowserProvider(settings.ttsProvider)) {
+        window.speechSynthesis.resume();
+        setTtsStatus('playing');
+        return;
+    }
+
     if (audioRef.current && audioRef.current.paused) {
         audioRef.current.play().catch(console.error);
         setTtsStatus('playing');
     }
   };
 
-  const playOneSegment = async (text: string): Promise<void> => {
+  const ttsConfigSignature = useMemo(() => JSON.stringify({
+    provider: settings.ttsProvider,
+    speed: settings.ttsSpeed,
+    sfModel: settings.sfTtsModel,
+    sfVoice: settings.sfTtsVoice,
+    azureRegion: settings.azureRegion,
+    azureVoice: settings.azureVoice,
+    browserVoice: settings.browserVoice,
+    edgeVoice: settings.edgeVoice,
+    shadowingMode: settings.shadowingMode,
+    shadowingPause: settings.shadowingPause
+  }), [
+    settings.ttsProvider,
+    settings.ttsSpeed,
+    settings.sfTtsModel,
+    settings.sfTtsVoice,
+    settings.azureRegion,
+    settings.azureVoice,
+    settings.browserVoice,
+    settings.edgeVoice,
+    settings.shadowingMode,
+    settings.shadowingPause
+  ]);
+
+  const previousTTSConfigRef = useRef(ttsConfigSignature);
+  useEffect(() => {
+    if (previousTTSConfigRef.current !== ttsConfigSignature) {
+        stopTTSIfActive();
+        previousTTSConfigRef.current = ttsConfigSignature;
+    }
+  }, [ttsConfigSignature]);
+
+  const previousInputTextRef = useRef(inputText);
+  useEffect(() => {
+    if (previousInputTextRef.current !== inputText) {
+        stopTTSIfActive();
+        previousInputTextRef.current = inputText;
+    }
+  }, [inputText]);
+
+  const playOneSegment = async (text: string, playbackRevision: number): Promise<void> => {
      if (!text.trim()) return;
+     if (!isTTSRunCurrent(playbackRevision)) return;
 
-     if (settings.ttsProvider === 'browser') {
-        // 调试：打印所有本地语音
-        const allLocalVoices = browserVoices.filter(v => v.localService);
-        console.log('=== 所有本地语音 ===');
-        allLocalVoices.forEach(v => {
-            console.log(`- ${v.name} (${v.lang}) URI: ${v.voiceURI?.substring(0, 50)}...`);
-        });
-
+     if (isBrowserProvider(settings.ttsProvider)) {
         return new Promise((resolve, reject) => {
+            const finish = () => {
+                if (activeSpeechResolveRef.current === finish) {
+                    activeSpeechResolveRef.current = null;
+                }
+                resolve();
+            };
+            activeSpeechResolveRef.current = finish;
+
             const uttr = new SpeechSynthesisUtterance(text);
             uttr.rate = settings.ttsSpeed;
 
@@ -428,7 +529,7 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
             const targetLang = langMap[detectedLang] || 'en-US';
 
             // 获取用户选择的语音
-            let selectedVoiceURI = settings.browserVoice;
+            const selectedVoiceURI = settings.browserVoice;
 
             if (selectedVoiceURI) {
                 // 去掉 "missing:" 前缀
@@ -463,10 +564,9 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
 
                 // 策略3: 同一语言的 Premium/Enhanced 优先
                 if (!candidate && freshVoices.length > 0) {
-                    const langVoices = freshVoices.filter(v =>
-                        v.lang.startsWith(detectedLang) ||
-                        (detectedLang === 'en' && v.lang.startsWith('en'))
-                    );
+                    const matchingVoices = freshVoices.filter(v => browserLangMatches(v.lang || '', detectedLang) && !isNoveltyVoice(v));
+                    const preferredVoices = matchingVoices.filter(v => v.localService);
+                    const langVoices = preferredVoices.length > 0 ? preferredVoices : matchingVoices;
 
                     // 优先找 Premium/Enhanced/Siri
                     const qualityVoice = langVoices.find(v =>
@@ -502,32 +602,24 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
                 uttr.lang = targetLang;
             }
 
-            uttr.onend = () => resolve();
+            setTtsStatus('playing');
+            uttr.onend = finish;
             uttr.onerror = (e) => {
+                activeSpeechResolveRef.current = null;
                 console.error('[TTS] 播放错误:', e);
                 reject(e);
             };
 
-            // 关键：在 speak 前先取消之前的播放
-            window.speechSynthesis.cancel();
-            window.speechSynthesis.speak(uttr);
-        });
-     }
-     
-     if (settings.ttsProvider === 'google') {
-        let lang = 'en';
-        if (detectedLang === 'zh') lang = 'zh-CN';
-        else if (detectedLang === 'ja') lang = 'ja';
-        else if (detectedLang === 'ru') lang = 'ru';
-
-        return new Promise((resolve) => {
-             // Force speed 1.0 for Google Free TTS to prevent issues
-             googleTTS.current.play(text, lang, 1.0).then(() => resolve());
+            if (isTTSRunCurrent(playbackRevision)) {
+                window.speechSynthesis.speak(uttr);
+            } else {
+                finish();
+            }
         });
      }
      
      // API TTS
-     const cacheKey = `${text}_${settings.ttsProvider}_${settings.sfTtsVoice}_${settings.azureVoice}_${settings.ttsSpeed}`;
+     const cacheKey = `${text}_${settings.ttsProvider}_${settings.sfTtsVoice}_${settings.azureVoice}_${settings.edgeVoice}_${settings.ttsSpeed}`;
      let url = getAudioFromCache(cacheKey);
 
      if (!url) {
@@ -539,6 +631,8 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
                  if (settings.ttsProvider === 'siliconflow') {
                     if (!settings.apiKey) throw new Error("缺少 Key");
                     return await sfService.generateSpeech(text, settings.sfTtsModel, settings.sfTtsVoice, settings.ttsSpeed);
+                } else if (settings.ttsProvider === 'edge') {
+                    return await edgeService.generateSpeech(text, settings.edgeVoice, settings.ttsSpeed);
                 } else {
                     if (!settings.azureKey) throw new Error("缺少 Key");
                     const azure = new AzureTTSService(settings.azureKey, settings.azureRegion);
@@ -549,35 +643,45 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
             // CosyVoice2 首次生成较慢，设置 60 秒超时
             const timeoutPromise = new Promise<never>((_, reject) => setTimeout(() => reject(new Error("请求超时 (CosyVoice2 生成较慢，请稍候)")), 60000));
             audioData = await Promise.race([fetchPromise, timeoutPromise]);
+
+            if (!isTTSRunCurrent(playbackRevision)) return;
             
             const blob = new Blob([audioData], { type: 'audio/mp3' });
             url = URL.createObjectURL(blob);
             saveAudioToCache(cacheKey, url);
         } catch(err: any) {
-            isFetchingAudio.current = false;
              if (err.message === "Azure_429") alert("请求过于频繁 (Azure 限制)，请稍后再试");
              else alert(err.message || "TTS Error");
              throw err;
         } finally {
-            isFetchingAudio.current = false;
+            if (playbackRevisionRef.current === playbackRevision) {
+                isFetchingAudio.current = false;
+            }
         }
      }
      
      if (url) {
+         if (!isTTSRunCurrent(playbackRevision)) return;
          setAudioUrl(url);
          return new Promise((resolve, reject) => {
              const audio = new Audio(url);
              audioRef.current = audio;
+             const finish = () => {
+                 if (activeAudioResolveRef.current === finish) {
+                     activeAudioResolveRef.current = null;
+                 }
+                 resolve();
+             };
+             activeAudioResolveRef.current = finish;
 
              // 设置 ttsStatus 为 playing，这样播放按钮会变成暂停按钮
              setTtsStatus('playing');
 
              audio.onended = () => {
-                 setTtsStatus('idle');
-                 resolve();
+                 finish();
              };
              audio.onerror = (e) => {
-                 setTtsStatus('idle');
+                 activeAudioResolveRef.current = null;
                  reject(e);
              };
              audio.play().catch((err) => {
@@ -591,8 +695,8 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
   const handleTTS = async () => {
     if (!inputText.trim()) return;
 
-    // 处理暂停/继续逻辑 (仅对 API TTS 有效)
-    if (ttsStatus === 'paused' && audioRef.current) {
+    // 处理暂停/继续逻辑
+    if (ttsStatus === 'paused') {
         resumeTTS();
         return;
     }
@@ -620,7 +724,7 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
     }
 
     stopTTS();
-    isStoppedRef.current = false;
+    const playbackRevision = beginTTSRun();
     setTtsStatus(settings.shadowingMode ? 'playing' : 'loading');
 
     // REFACTORED SHADOWING MODE LOOP
@@ -629,14 +733,14 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
         const sentences = splitTextIntoSentences(textToPlay);
         
         for (const sentence of sentences) {
-            if (isStoppedRef.current) break;
+            if (!isTTSRunCurrent(playbackRevision)) break;
             if (!sentence.trim()) continue;
 
             try {
                 // 1. Play Sentence
-                await playOneSegment(sentence);
+                await playOneSegment(sentence, playbackRevision);
                 
-                if (isStoppedRef.current) break;
+                if (!isTTSRunCurrent(playbackRevision)) break;
 
                 // 2. Pause for Shadowing
                 await new Promise(resolve => {
@@ -648,15 +752,23 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
                 break;
             }
         }
-        setTtsStatus('idle');
+        if (isTTSRunCurrent(playbackRevision)) setTtsStatus('idle');
     } 
     else {
         try {
-            await playOneSegment(textToPlay);
+            if (isBrowserProvider(settings.ttsProvider)) {
+                const segments = splitBrowserSpeechSegments(textToPlay);
+                for (const segment of segments) {
+                    if (!isTTSRunCurrent(playbackRevision)) break;
+                    await playOneSegment(segment, playbackRevision);
+                }
+            } else {
+                await playOneSegment(textToPlay, playbackRevision);
+            }
         } catch (e) {
              // Handled internally
         }
-        setTtsStatus('idle');
+        if (isTTSRunCurrent(playbackRevision)) setTtsStatus('idle');
     }
   };
 
@@ -765,6 +877,25 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
       setAddedAnalysisItems(prev => new Set(prev).add(item.text));
   };
 
+  const handleInputTextChange = (value: string) => {
+      stopTTSIfActive();
+      setInputText(value);
+  };
+
+  const handlePlaySingleSentence = async (text: string) => {
+      if (!text.trim()) return;
+      stopTTS();
+      const playbackRevision = beginTTSRun();
+      setTtsStatus('loading');
+      try {
+          await playOneSegment(text, playbackRevision);
+      } catch {
+          // playOneSegment already surfaces provider errors.
+      } finally {
+          if (isTTSRunCurrent(playbackRevision)) setTtsStatus('idle');
+      }
+  };
+
   const renderReaderContent = () => {
     if (!inputText) return <div className="text-gray-400 mt-10 text-center">在此粘贴文章，开始跟读...</div>;
     
@@ -799,9 +930,11 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
   };
 
   const handleVoiceChange = (val: string) => {
+    stopTTSIfActive();
     // Allow selection even if missing, to trigger guide on next interaction or persist user wish
     if (settings.ttsProvider === 'siliconflow') onSettingsChange({ ...settings, sfTtsVoice: val });
     else if (settings.ttsProvider === 'azure') onSettingsChange({ ...settings, azureVoice: val });
+    else if (settings.ttsProvider === 'edge') onSettingsChange({ ...settings, edgeVoice: val });
     else onSettingsChange({ ...settings, browserVoice: val });
     
     // Show guide immediately if selecting a missing voice
@@ -810,6 +943,12 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
         else setShowIosGuide(true);
     }
   };
+
+  const playButtonLabel =
+    ttsStatus === 'loading' ? '正在准备朗读' :
+    ttsStatus === 'playing' ? '暂停朗读' :
+    ttsStatus === 'paused' ? '继续朗读' :
+    '开始朗读';
 
   return (
     <div className="flex flex-col min-h-[calc(100vh-4rem)] max-w-5xl mx-auto relative" onClick={() => setModalPosition(null)}>
@@ -926,7 +1065,7 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
                     <textarea
                         ref={textareaRef}
                         value={inputText}
-                        onChange={(e) => setInputText(e.target.value)}
+                        onChange={(e) => handleInputTextChange(e.target.value)}
                         onSelect={updatePlayMode}
                         onClick={updatePlayMode}
                         onKeyUp={updatePlayMode}
@@ -1042,7 +1181,7 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
                                          <div key={idx} className="bg-white/80 dark:bg-white/5 p-4 rounded-xl border border-indigo-50 dark:border-white/5">
                                              <div className="flex gap-3">
                                                  <button 
-                                                    onClick={() => playOneSegment(sent.text)}
+                                                    onClick={() => handlePlaySingleSentence(sent.text)}
                                                     className="mt-1 flex-none w-8 h-8 rounded-full bg-indigo-100 dark:bg-indigo-900/50 text-indigo-600 dark:text-indigo-300 flex items-center justify-center hover:bg-indigo-200 dark:hover:bg-indigo-800 transition-colors"
                                                  >
                                                     <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
@@ -1118,21 +1257,33 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
              <div className="flex flex-col gap-4">
                  <div className="flex items-center gap-3">
                      {/* Play Button */}
-                     <button
-                        onClick={handleTTS}
-                        disabled={ttsStatus === 'loading' || isFetchingAudio.current}
-                        className={`flex-none w-12 h-12 rounded-full flex items-center justify-center text-white shadow-lg shadow-blue-500/30 transition-all ${
-                            (ttsStatus === 'playing' || ttsStatus === 'paused') ? 'bg-red-500 hover:bg-red-600' : 'bg-black dark:bg-white dark:text-black hover:bg-gray-800 dark:hover:bg-gray-200'
+	                     <button
+	                        onClick={handleTTS}
+	                        disabled={ttsStatus === 'loading' || isFetchingAudio.current}
+                            aria-label={playButtonLabel}
+                            title={playButtonLabel}
+	                        className={`flex-none w-12 h-12 rounded-full flex items-center justify-center text-white shadow-lg shadow-blue-500/30 transition-all ${
+                            ttsStatus === 'playing' ? 'bg-red-500 hover:bg-red-600' : 'bg-black dark:bg-white dark:text-black hover:bg-gray-800 dark:hover:bg-gray-200'
                         }`}
                      >
                          {ttsStatus === 'loading' || isFetchingAudio.current ? (
                              <svg className="animate-spin w-5 h-5" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                         ) : (ttsStatus === 'playing' || ttsStatus === 'paused') ? (
+                         ) : ttsStatus === 'playing' ? (
                             <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><rect x="7" y="4" width="3.5" height="16"></rect><rect x="13.5" y="4" width="3.5" height="16"></rect></svg>
                          ) : (
                             <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M8.5 5.5l10 7-10 7V5.5z"></path></svg>
                          )}
                      </button>
+                     {(ttsStatus !== 'idle' || isFetchingAudio.current) && (
+                         <button
+                            onClick={stopTTS}
+                            aria-label="停止朗读"
+                            title="停止朗读并清除当前播放队列"
+                            className="flex-none w-10 h-10 rounded-full flex items-center justify-center bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20 dark:hover:text-red-300 transition-colors"
+                         >
+                             <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="1.5"></rect></svg>
+                         </button>
+                     )}
                      
                      <div className="flex-1 min-w-0 flex flex-col justify-center">
                          <div className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1 flex items-center gap-2">
@@ -1147,45 +1298,57 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
                          </div>
                          
                          {/* Voice Selector */}
-                         {settings.ttsProvider === 'google' ? (
-                             <div className="text-sm font-bold text-gray-800 dark:text-white">Google 默认音色</div>
-                         ) : (
-                             <div className="flex items-center gap-2 w-full">
+                         <div className="flex items-center gap-2 w-full">
                                 <div className="relative flex-1">
                                     <select 
-                                        value={
-                                            settings.ttsProvider === 'siliconflow' ? settings.sfTtsVoice :
+                                        aria-label="选择语音"
+	                                        value={
+	                                            settings.ttsProvider === 'siliconflow' ? settings.sfTtsVoice :
                                             settings.ttsProvider === 'azure' ? settings.azureVoice :
-                                            settings.browserVoice
-                                        }
+                                                settings.ttsProvider === 'edge' ? settings.edgeVoice :
+	                                            settings.browserVoice
+	                                        }
                                         onChange={(e) => handleVoiceChange(e.target.value)}
                                         className="w-full bg-transparent font-bold text-gray-900 dark:text-white text-sm focus:outline-none appearance-none pr-8 cursor-pointer truncate"
                                     >
                                         {settings.ttsProvider === 'siliconflow' && SF_VOICES.map((v) => <option key={v.value} value={v.value}>{v.label}</option>)}
                                         {settings.ttsProvider === 'azure' && AZURE_VOICES.map(v => <option key={v.value} value={v.value}>{v.label}</option>)}
-                                        {settings.ttsProvider === 'browser' && (
-                                            uiVoices.length > 0 
-                                            ? uiVoices.map(v => <option key={v.value} value={v.value} disabled={v.disabled} className={v.disabled ? 'text-gray-400' : ''}>{v.label}</option>)
-                                            : <option value="" disabled>加载本地音色...</option>
-                                        )}
+                                        {settings.ttsProvider === 'edge' && EDGE_TTS_VOICES.map(v => <option key={v.value} value={v.value}>{v.label}</option>)}
+	                                        {isBrowserProvider(settings.ttsProvider) && (
+	                                            <>
+	                                                <option value="">
+                                                        {voicesLoading
+                                                            ? '正在加载音色...'
+                                                            : '系统默认音色'}
+                                                    </option>
+	                                                {uiVoices.map(v => <option key={v.value} value={v.value}>{v.label}</option>)}
+	                                            </>
+	                                        )}
                                     </select>
                                     <svg className="w-4 h-4 text-gray-400 absolute right-0 top-1/2 -translate-y-1/2 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
                                 </div>
                                 
-                                {(settings.ttsProvider === 'browser' || settings.ttsProvider === 'azure') && (
+                                {(isBrowserProvider(settings.ttsProvider) || settings.ttsProvider === 'azure' || settings.ttsProvider === 'edge') && (
                                     <button 
-                                        onClick={() => settings.ttsProvider === 'browser' ? setShowIosGuide(true) : alert("Azure 音色为云端合成，音质由微软保证。")}
+                                        onClick={() => {
+                                            if (settings.ttsProvider === 'azure') {
+                                                alert("Azure 是正式微软云端合成，需要用户自己的 Azure Key。");
+                                            } else if (settings.ttsProvider === 'edge') {
+                                                alert("Edge 免费云端使用非官方 Edge Read Aloud 接口，免用户 Key，但会经过本项目 /api/edge-tts 转发；它不是微软公开 API，可能失效。");
+                                            } else {
+                                                setShowIosGuide(true);
+                                            }
+                                        }}
                                         className="p-1.5 rounded-full bg-blue-50 dark:bg-blue-900/30 text-blue-500 hover:bg-blue-100 dark:hover:bg-blue-900/50 flex-none"
                                     >
                                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
                                     </button>
                                 )}
                              </div>
-                         )}
                      </div>
 
                      {/* Action Buttons */}
-                     {audioUrl && settings.ttsProvider !== 'google' && (
+                     {audioUrl && !isBrowserProvider(settings.ttsProvider) && (
                          <a 
                             href={audioUrl} 
                             download={`speech_${Date.now()}.mp3`}
@@ -1198,24 +1361,21 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
                  </div>
 
                  {/* Row 2: Speed Slider */}
-                 {settings.ttsProvider === 'google' ? (
-                     <div className="w-full py-1 px-3 bg-yellow-50 dark:bg-yellow-900/20 text-yellow-700 dark:text-yellow-400 text-xs rounded-lg text-center border border-yellow-100 dark:border-yellow-500/20">
-                         Google 免费接口不支持语速调节 (默认 1.0x)
-                     </div>
-                 ) : (
-                     <div className="flex items-center gap-3 px-1">
-                         <span className="text-xs font-bold text-gray-400 w-8">0.5x</span>
-                         <input 
+	                 <div className="flex items-center gap-3 px-1">
+	                         <span className="text-xs font-bold text-gray-400 w-8">0.5x</span>
+	                         <input 
                              type="range" min="0.5" max="1.5" step="0.1"
                              value={settings.ttsSpeed}
-                             onChange={(e) => onSettingsChange({ ...settings, ttsSpeed: parseFloat(e.target.value) })}
+                             onChange={(e) => {
+                                stopTTSIfActive();
+                                onSettingsChange({ ...settings, ttsSpeed: parseFloat(e.target.value) });
+                             }}
                              className="flex-1 h-1.5 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer accent-black dark:accent-white"
-                         />
-                         <span className="text-xs font-bold text-gray-400 w-8 text-right">1.5x</span>
-                         <span className="text-xs font-mono font-medium text-gray-900 dark:text-white min-w-[32px] text-center bg-gray-100 dark:bg-gray-800 rounded px-1">{settings.ttsSpeed.toFixed(1)}x</span>
-                     </div>
-                 )}
-             </div>
+	                         />
+	                         <span className="text-xs font-bold text-gray-400 w-8 text-right">1.5x</span>
+	                         <span className="text-xs font-mono font-medium text-gray-900 dark:text-white min-w-[32px] text-center bg-gray-100 dark:bg-gray-800 rounded px-1">{settings.ttsSpeed.toFixed(1)}x</span>
+	                 </div>
+	             </div>
         </div>
         
         {/* Modals */}
