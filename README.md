@@ -37,3 +37,24 @@
 - SiliconFlow API (CosyVoice2 TTS)
 - Azure AI Speech (TTS)
 - Edge Read Aloud 非官方 TTS 兼容接口 (`/api/edge-tts`)
+
+## Edge 免费云端 TTS 维护说明
+
+生产环境的 `/api/edge-tts` 是 Vercel Serverless Function。为了避免 Vercel 函数打包时漏掉 `api/` 外部的 TypeScript helper，生产合成逻辑必须保留在 [api/edge-tts.ts](api/edge-tts.ts) 单文件内；[server/edgeTTS.ts](server/edgeTTS.ts) 只供本地 Vite dev middleware 使用。
+
+如果线上出现 `Edge TTS Error 500` 或 `FUNCTION_INVOCATION_FAILED`：
+
+1. 先看 Vercel 函数日志：
+   ```bash
+   vercel logs <deployment-id> --project musicianra --no-follow --expand --limit 100
+   ```
+2. 直接验证生产接口：
+   ```bash
+   curl -s -D /tmp/edge-tts-headers.txt -o /tmp/edge-tts.mp3 \
+     -X POST https://musicianra.vercel.app/api/edge-tts \
+     -H 'Content-Type: application/json' \
+     --data '{"text":"hello","voice":"en-US-AvaMultilingualNeural","speed":1}'
+   ```
+3. 成功时应返回 `HTTP 200`、`content-type: audio/mpeg`，并生成非空 MP3 文件。
+
+2026-04-28 的线上 500 根因是 Vercel 日志中的 `ERR_MODULE_NOT_FOUND: Cannot find module '/var/task/server/edgeTTS.ts'`。修复方式是把生产函数依赖内联到 `api/edge-tts.ts`，确保 Vercel 打包出的函数启动时不再跨目录 import `server/edgeTTS.ts`。

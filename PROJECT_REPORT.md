@@ -99,7 +99,7 @@
 |------|------|------|------|
 | **SiliconFlow TTS** | CosyVoice2/IndexTTS | 支持音色选择，返回 MP3 | [services/siliconFlow.ts](services/siliconFlow.ts) |
 | **Azure TTS** | Azure Speech Services | 30+ 种神经网络音色，SSML 控制 | [services/azureTTS.ts](services/azureTTS.ts) |
-| **Edge 免费云端** | 非官方 Edge Read Aloud 兼容接口 | 免用户 Key，经 `/api/edge-tts` server-side 转发，实验性质 | [server/edgeTTS.ts](server/edgeTTS.ts), [api/edge-tts.ts](api/edge-tts.ts) |
+| **Edge 免费云端** | 非官方 Edge Read Aloud 兼容接口 | 免用户 Key，经 `/api/edge-tts` server-side 转发，实验性质；生产函数为单文件 Vercel handler | [api/edge-tts.ts](api/edge-tts.ts), [server/edgeTTS.ts](server/edgeTTS.ts) |
 | **浏览器原生** | window.speechSynthesis | iOS 优化，无需 API | ReaderView 内置 |
 
 ### TTS 音色支持
@@ -117,6 +117,47 @@
 **Edge 免费云端:**
 - 使用 Edge Read Aloud 风格 Neural 音色，不需要用户 Key。
 - 不是微软公开 API，可能因服务协议变化而失效；前端不能直接稳定调用，必须走 server-side `/api/edge-tts`。
+- 生产环境的 Vercel Function 不应跨目录 import `server/edgeTTS.ts`；生产合成逻辑已内联在 [api/edge-tts.ts](api/edge-tts.ts)，避免函数包启动时找不到 `server/` 下的 TS 文件。
+
+### Edge TTS 生产部署排障记录
+
+**问题现象:** 前端提示 `Edge TTS Error 500: 部署环境的 /api/edge-tts 服务端函数异常，请查看部署平台 Function 日志`。
+
+**真实根因:** Vercel Function 启动阶段失败，日志显示：
+
+```text
+ERR_MODULE_NOT_FOUND: Cannot find module '/var/task/server/edgeTTS.ts' imported from /var/task/api/edge-tts.js
+```
+
+这说明请求没有进入业务 catch 分支，而是在 serverless 函数模块加载时就崩溃。原因是 Vercel 打包 `/api/edge-tts.ts` 后，没有把根目录 `server/edgeTTS.ts` 作为运行时文件放进 `/var/task/server/`。
+
+**最终修复:**
+
+- [api/edge-tts.ts](api/edge-tts.ts) 改为自包含的 Vercel Node.js handler。
+- Edge TTS 输入校验、超时控制、`edge-tts-universal` 动态导入和 MP3 拼接都保留在 `api/edge-tts.ts` 内。
+- [server/edgeTTS.ts](server/edgeTTS.ts) 保留给本地 Vite dev middleware 使用，不作为生产函数依赖。
+- 超时 timer 在 `finally` 中清理，避免 serverless 请求结束后残留未清理计时器。
+
+**验证命令:**
+
+```bash
+npx tsc --noEmit
+npm run build
+node --experimental-strip-types --input-type=module -e "import { Readable } from 'node:stream'; const { default: handler } = await import('./api/edge-tts.ts'); const req = Readable.from([JSON.stringify({ text: 'hello', voice: 'en-US-AvaMultilingualNeural', speed: 1 })]); req.method = 'POST'; const headers = {}; const res = { statusCode: 0, setHeader(k, v) { headers[k] = v; }, end(data) { console.log('status', this.statusCode); console.log('contentType', headers['Content-Type']); console.log('bytes', Buffer.isBuffer(data) ? data.length : Buffer.byteLength(String(data || ''))); } }; await handler(req, res);"
+curl -s -D /tmp/edge-tts-headers.txt -o /tmp/edge-tts.mp3 \
+  -X POST https://musicianra.vercel.app/api/edge-tts \
+  -H 'Content-Type: application/json' \
+  --data '{"text":"hello","voice":"en-US-AvaMultilingualNeural","speed":1}'
+```
+
+**成功标准:** 生产接口返回 `HTTP 200`、`content-type: audio/mpeg`，响应体是非空 MP3。2026-04-28 修复后的生产验证结果为 `HTTP/2 200`、`content-length: 5616`。
+
+**后续维护规则:**
+
+- 修改生产 `/api/edge-tts` 时，优先保持 [api/edge-tts.ts](api/edge-tts.ts) 单文件自包含。
+- 不要从 `api/edge-tts.ts` 直接 import `../server/*.ts`，除非同时确认 Vercel 函数包包含该文件。
+- 看到 `FUNCTION_INVOCATION_FAILED` 时先查 Vercel 日志，不要先假设是 Edge Read Aloud 上游失效。
+- 如果日志进入 `[EdgeTTS] synthesis failed`，才继续排查上游 WebSocket、超时或音色参数。
 
 ### AI 服务 ([services/siliconFlow.ts](services/siliconFlow.ts))
 
