@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { EdgeTTSInputError, EdgeTTSTimeoutError, synthesizeEdgeSpeech } from '../server/edgeTTS';
+import { EdgeTTSInputError, EdgeTTSTimeoutError, synthesizeEdgeSpeech } from '../server/edgeTTS.ts';
 
 type VercelRequest = IncomingMessage & {
   body?: unknown;
