@@ -39,13 +39,17 @@ export class EdgeCloudTTSService {
     });
 
     if (!response.ok) {
-      let message = `Edge TTS Error ${response.status}`;
+      const fallbackMessage =
+        response.status >= 500
+          ? '部署环境的 /api/edge-tts 服务端函数异常，请查看部署平台 Function 日志'
+          : 'Edge TTS 请求失败';
+      let message = `Edge TTS Error ${response.status}: ${fallbackMessage}`;
       try {
         const data = await response.json();
         if (typeof data?.error === 'string') message = data.error;
       } catch {
         const text = await response.text().catch(() => '');
-        if (text) message = text;
+        if (text) message = `Edge TTS Error ${response.status}: ${text.slice(0, 300)}`;
       }
       throw new Error(message);
     }

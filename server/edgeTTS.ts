@@ -1,9 +1,15 @@
 import { Buffer } from 'node:buffer';
-import { Communicate } from 'edge-tts-universal';
 
 export const EDGE_TTS_TEXT_LIMIT = 5000;
 export const DEFAULT_EDGE_VOICE = 'en-US-AvaMultilingualNeural';
 const EDGE_TTS_SYNTHESIS_TIMEOUT_MS = 30000;
+
+export class EdgeTTSInputError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'EdgeTTSInputError';
+  }
+}
 
 export interface EdgeTTSRequest {
   text?: unknown;
@@ -26,17 +32,17 @@ const normalizeVoice = (voice: unknown): string => {
   if (typeof voice !== 'string' || !voice.trim()) return DEFAULT_EDGE_VOICE;
   const value = voice.trim();
   if (!/^[a-z]{2}-[A-Z]{2}-[A-Za-z0-9]+(?:Multilingual)?Neural$/.test(value)) {
-    throw new Error('Edge 音色格式无效');
+    throw new EdgeTTSInputError('Edge 音色格式无效');
   }
   return value;
 };
 
 const normalizeText = (text: unknown): string => {
-  if (typeof text !== 'string') throw new Error('缺少朗读文本');
+  if (typeof text !== 'string') throw new EdgeTTSInputError('缺少朗读文本');
   const value = text.trim();
-  if (!value) throw new Error('缺少朗读文本');
+  if (!value) throw new EdgeTTSInputError('缺少朗读文本');
   if (value.length > EDGE_TTS_TEXT_LIMIT) {
-    throw new Error(`Edge 免费云端单次最多 ${EDGE_TTS_TEXT_LIMIT} 字，请选中较短片段或开启跟读模式`);
+    throw new EdgeTTSInputError(`Edge 免费云端单次最多 ${EDGE_TTS_TEXT_LIMIT} 字，请选中较短片段或开启跟读模式`);
   }
   return value;
 };
@@ -53,6 +59,7 @@ async function synthesizeEdgeSpeechUnsafe(payload: EdgeTTSRequest): Promise<Buff
   const text = normalizeText(payload.text);
   const voice = normalizeVoice(payload.voice);
   const speed = normalizeSpeed(payload.speed);
+  const { Communicate } = await import('edge-tts-universal');
   const communicate = new Communicate(text, {
     voice,
     rate: toRate(speed),
