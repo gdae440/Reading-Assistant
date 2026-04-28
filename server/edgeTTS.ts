@@ -62,11 +62,16 @@ const normalizeText = (text: unknown): string => {
 
 export async function synthesizeEdgeSpeech(payload: EdgeTTSRequest): Promise<Buffer> {
   const timeoutMs = getEdgeTTSTimeoutMs();
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
-    setTimeout(() => reject(new EdgeTTSTimeoutError(timeoutMs)), timeoutMs);
+    timeoutId = setTimeout(() => reject(new EdgeTTSTimeoutError(timeoutMs)), timeoutMs);
   });
 
-  return Promise.race([synthesizeEdgeSpeechUnsafe(payload), timeout]);
+  try {
+    return await Promise.race([synthesizeEdgeSpeechUnsafe(payload), timeout]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
 }
 
 async function synthesizeEdgeSpeechUnsafe(payload: EdgeTTSRequest): Promise<Buffer> {
