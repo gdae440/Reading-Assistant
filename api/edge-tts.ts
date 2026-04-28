@@ -1,66 +1,76 @@
-import { EdgeTTSInputError, synthesizeEdgeSpeech } from '../server/edgeTTS';
-import type { IncomingMessage, ServerResponse } from 'node:http';
+import { EdgeTTSInputError, EdgeTTSTimeoutError, synthesizeEdgeSpeech } from '../server/edgeTTS.ts';
 
-type EdgeTTSRequest = IncomingMessage & {
-  body?: unknown;
-  method?: string;
+const jsonHeaders = {
+  'Cache-Control': 'no-store'
 };
 
-type EdgeTTSResponse = ServerResponse;
-
-const sendJson = (
-  response: EdgeTTSResponse,
-  body: unknown,
-  status: number,
-  headers: Record<string, string> = {}
-) => {
-  response.statusCode = status;
-  response.setHeader('Content-Type', 'application/json; charset=utf-8');
-  response.setHeader('Cache-Control', 'no-store');
-  for (const [key, value] of Object.entries(headers)) {
-    response.setHeader(key, value);
-  }
-  response.end(JSON.stringify(body));
+const methodNotAllowed = (): Response => {
+  return Response.json(
+    { error: 'Method Not Allowed' },
+    {
+      status: 405,
+      headers: {
+        ...jsonHeaders,
+        Allow: 'POST'
+      }
+    }
+  );
 };
 
-const readPayload = async (request: EdgeTTSRequest): Promise<unknown> => {
-  if (request.body !== undefined) {
-    return typeof request.body === 'string' ? JSON.parse(request.body) : request.body;
-  }
-
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-
-  const raw = Buffer.concat(chunks).toString('utf8');
+const readPayload = async (request: Request): Promise<unknown> => {
+  const raw = await request.text();
   return raw ? JSON.parse(raw) : {};
 };
 
-export default async function handler(request: EdgeTTSRequest, response: EdgeTTSResponse) {
-  if (request.method !== 'POST') {
-    sendJson(response, { error: 'Method Not Allowed' }, 405, { Allow: 'POST' });
-    return;
-  }
+const getErrorStatus = (error: unknown): number => {
+  if (error instanceof SyntaxError || error instanceof EdgeTTSInputError) return 400;
+  if (error instanceof EdgeTTSTimeoutError) return 504;
+  return 502;
+};
 
+const errorBody = (error: unknown): { error: string } => ({
+  error: error instanceof Error ? error.message : 'Edge TTS 请求失败'
+});
+
+const logSynthesisError = (error: unknown, status: number) => {
+  console.error('[EdgeTTS] synthesis failed', {
+    status,
+    name: error instanceof Error ? error.name : typeof error,
+    message: error instanceof Error ? error.message : String(error),
+    stack: error instanceof Error ? error.stack : undefined
+  });
+};
+
+export async function POST(request: Request): Promise<Response> {
   try {
     const payload = await readPayload(request);
     const audio = await synthesizeEdgeSpeech(payload && typeof payload === 'object' ? payload : {});
 
-    response.statusCode = 200;
-    response.setHeader('Content-Type', 'audio/mpeg');
-    response.setHeader('Cache-Control', 'no-store');
-    response.end(audio);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Edge TTS 请求失败';
-    const status = error instanceof SyntaxError || error instanceof EdgeTTSInputError ? 400 : 502;
-
-    console.error('[EdgeTTS] synthesis failed', {
-      status,
-      message,
-      stack: error instanceof Error ? error.stack : undefined
+    return new Response(audio, {
+      status: 200,
+      headers: {
+        'Content-Type': 'audio/mpeg',
+        'Cache-Control': 'no-store'
+      }
     });
+  } catch (error) {
+    const status = getErrorStatus(error);
+    logSynthesisError(error, status);
 
-    sendJson(response, { error: message }, status);
+    return Response.json(errorBody(error), {
+      status,
+      headers: jsonHeaders
+    });
   }
 }
+
+export function GET(): Response {
+  return methodNotAllowed();
+}
+
+export default {
+  fetch(request: Request): Promise<Response> | Response {
+    if (request.method === 'POST') return POST(request);
+    return methodNotAllowed();
+  }
+};

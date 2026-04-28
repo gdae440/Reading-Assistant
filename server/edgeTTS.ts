@@ -2,12 +2,25 @@ import { Buffer } from 'node:buffer';
 
 export const EDGE_TTS_TEXT_LIMIT = 5000;
 export const DEFAULT_EDGE_VOICE = 'en-US-AvaMultilingualNeural';
-const EDGE_TTS_SYNTHESIS_TIMEOUT_MS = 30000;
+const DEFAULT_EDGE_TTS_SYNTHESIS_TIMEOUT_MS = 12000;
+
+const getEdgeTTSTimeoutMs = (): number => {
+  const configured = Number(process.env.EDGE_TTS_TIMEOUT_MS);
+  if (!Number.isFinite(configured) || configured <= 0) return DEFAULT_EDGE_TTS_SYNTHESIS_TIMEOUT_MS;
+  return Math.min(25000, Math.max(3000, configured));
+};
 
 export class EdgeTTSInputError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'EdgeTTSInputError';
+  }
+}
+
+export class EdgeTTSTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`Edge TTS 请求超时 (${Math.round(timeoutMs / 1000)} 秒)，部署环境可能无法连接 Edge Read Aloud WebSocket，请切换浏览器本地/Azure/SiliconFlow 语音`);
+    this.name = 'EdgeTTSTimeoutError';
   }
 }
 
@@ -48,8 +61,9 @@ const normalizeText = (text: unknown): string => {
 };
 
 export async function synthesizeEdgeSpeech(payload: EdgeTTSRequest): Promise<Buffer> {
+  const timeoutMs = getEdgeTTSTimeoutMs();
   const timeout = new Promise<never>((_, reject) => {
-    setTimeout(() => reject(new Error('Edge TTS 请求超时，请稍后重试或切换本地/Azure')), EDGE_TTS_SYNTHESIS_TIMEOUT_MS);
+    setTimeout(() => reject(new EdgeTTSTimeoutError(timeoutMs)), timeoutMs);
   });
 
   return Promise.race([synthesizeEdgeSpeechUnsafe(payload), timeout]);
@@ -63,7 +77,7 @@ async function synthesizeEdgeSpeechUnsafe(payload: EdgeTTSRequest): Promise<Buff
   const communicate = new Communicate(text, {
     voice,
     rate: toRate(speed),
-    connectionTimeout: 15000
+    connectionTimeout: Math.min(8000, getEdgeTTSTimeoutMs())
   });
 
   const buffers: Buffer[] = [];
