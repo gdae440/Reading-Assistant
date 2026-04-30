@@ -6,6 +6,7 @@ import { AzureTTSService, AZURE_VOICES } from '../services/azureTTS';
 import { EdgeCloudTTSService, EDGE_TTS_VOICES } from '../services/edgeTTSClient';
 import { WordDetailModal } from '../components/WordDetailModal';
 import { useLocalStorage } from '../hooks/useLocalStorage';
+import { normalizeWordKey } from '../utils/vocabReview';
 
 // SiliconFlow CosyVoice2 音色列表
 const SF_VOICES = [
@@ -157,6 +158,7 @@ const splitBrowserSpeechSegments = (text: string): string[] => {
 };
 
 interface Props {
+  vocab: WordEntry[];
   settings: AppSettings;
   onAddToVocab: (entry: WordEntry) => void;
   onUpdateVocabEntry: (id: string, updates: Partial<WordEntry>) => void;
@@ -164,7 +166,7 @@ interface Props {
   onAddToHistory: (entry: HistoryEntry) => void;
 }
 
-export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVocabEntry, onSettingsChange, onAddToHistory }) => {
+export const ReaderView: React.FC<Props> = ({ vocab, settings, onAddToVocab, onUpdateVocabEntry, onSettingsChange, onAddToHistory }) => {
   // Persistence
   const [inputText, setInputText] = useLocalStorage("reader_text", "");
   const [translationResult, setTranslationResult] = useLocalStorage<{text: string, type: 'translation' | 'reply'} | null>("reader_translation_result", null);
@@ -236,6 +238,11 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
     if (/[\u4e00-\u9fa5]/.test(textSample)) return 'zh';
     return 'en';
   }, [inputText]);
+
+  const savedWordSet = useMemo(() => {
+    const keys = vocab.map(entry => normalizeWordKey(entry.word)).filter(Boolean);
+    return new Set(keys);
+  }, [vocab]);
 
   // UI Voices Logic - 只显示标准的语音，Mac 音效包（如 Bubbles、Cellos）不要
   const uiVoices = useMemo(() => {
@@ -925,6 +932,7 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
                     if (!chunk.trim() || /^[.,!?;:()（）"。！？]+$/.test(chunk)) return <span key={cIdx}>{chunk}</span>;
                     
                     const belongsToKeySentence = sentences.some(s => s.text.includes(chunk) && para.includes(s.text));
+                    const isSavedWord = savedWordSet.has(normalizeWordKey(chunk));
                     
                     return (
                         <span 
@@ -933,7 +941,11 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
                             className={`cursor-pointer rounded px-0.5 transition-colors ${
                                 belongsToKeySentence 
                                 ? 'bg-yellow-100 dark:bg-yellow-900/30 text-gray-900 dark:text-gray-100 border-b-2 border-yellow-300' 
+                                : isSavedWord
+                                ? 'bg-teal-50 dark:bg-teal-900/20 text-gray-900 dark:text-gray-100 border-b-2 border-teal-300 dark:border-teal-500 hover:bg-teal-100 dark:hover:bg-teal-900/40'
                                 : 'hover:bg-blue-100 dark:hover:bg-blue-900/50 hover:text-blue-700 dark:hover:text-blue-300'
+                            } ${
+                                belongsToKeySentence && isSavedWord ? 'underline decoration-teal-500 decoration-2 underline-offset-4' : ''
                             }`}
                         >
                             {chunk}

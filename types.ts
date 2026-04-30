@@ -1,4 +1,34 @@
 
+export type VocabFamiliarity = 'new' | 'known' | 'mastered';
+export type VocabReviewRating = 'again' | 'hard' | 'good' | 'easy';
+
+export interface VocabReviewStats {
+  schedulerVersion?: string;
+  dueAt: number;
+  lastReviewedAt?: number;
+  reviewCount: number;
+  correctCount: number;
+  wrongCount: number;
+  lapseCount: number;
+  difficulty: number;
+  stability: number;
+  retrievability: number;
+}
+
+export interface VocabReviewLogEntry {
+  schedulerVersion: string;
+  reviewedAt: number;
+  rating: VocabReviewRating;
+  elapsedDays: number;
+  scheduledDays: number;
+  retrievabilityBefore: number;
+  difficultyBefore: number;
+  stabilityBefore: number;
+  difficultyAfter: number;
+  stabilityAfter: number;
+  dueAt: number;
+}
+
 export interface WordEntry {
   id: string;
   word: string;
@@ -8,6 +38,9 @@ export interface WordEntry {
   meaningRu: string;
   contextSentence?: string;
   timestamp: number;
+  familiarity?: VocabFamiliarity;
+  reviewStats?: VocabReviewStats;
+  reviewLog?: VocabReviewLogEntry[];
 }
 
 export interface HistoryEntry {

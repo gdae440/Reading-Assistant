@@ -15,7 +15,8 @@
 
 - 不引入用户系统或云同步。
 - 不改变 API Key 的浏览器本地保存方式。
-- 不做复杂 SM-2 算法或长期记忆曲线建模。
+- 不实现墨墨私有 MM/MMX 算法的闭源细节。
+- 不直接照搬完整 Anki/FSRS 参数训练器；先实现可本地运行、可逐步优化的 FSRS-lite 调度。
 - 不强制用户每天打卡。
 - 不修改现有查词、翻译、OCR、TTS 的主流程。
 
@@ -36,6 +37,7 @@
 
 ```ts
 export type VocabFamiliarity = 'new' | 'known' | 'mastered';
+export type VocabReviewRating = 'again' | 'hard' | 'good' | 'easy';
 
 export interface WordEntry {
   id: string;
@@ -49,12 +51,30 @@ export interface WordEntry {
 
   familiarity?: VocabFamiliarity;
   reviewStats?: {
+    schedulerVersion: string;
     dueAt: number;
     lastReviewedAt?: number;
     reviewCount: number;
     correctCount: number;
     wrongCount: number;
+    lapseCount: number;
+    difficulty: number;
+    stability: number;
+    retrievability: number;
   };
+  reviewLog?: Array<{
+    schedulerVersion: string;
+    reviewedAt: number;
+    rating: VocabReviewRating;
+    elapsedDays: number;
+    scheduledDays: number;
+    retrievabilityBefore: number;
+    difficultyBefore: number;
+    stabilityBefore: number;
+    difficultyAfter: number;
+    stabilityAfter: number;
+    dueAt: number;
+  }>;
 }
 ```
 
@@ -62,18 +82,72 @@ export interface WordEntry {
 
 - 旧词条没有 `familiarity` 时视为 `new`。
 - 旧词条没有 `reviewStats` 时在读数据时用派生默认值，不需要一次性写回。
+- 旧词条没有 `reviewLog` 时视为空数组；从下一次复习开始记录日志。
+- 当前调度版本写入 `schedulerVersion = "fsrs-lite-v1"`，以后升级完整 FSRS 时用于数据迁移。
 - 第一次复习后再把 `reviewStats` 写入 localStorage。
 
 默认值：
 
 ```ts
 const defaultReviewStats = (timestamp: number) => ({
+  schedulerVersion: 'fsrs-lite-v1',
   dueAt: timestamp,
   reviewCount: 0,
   correctCount: 0,
-  wrongCount: 0
+  wrongCount: 0,
+  lapseCount: 0,
+  difficulty: 5,
+  stability: 0,
+  retrievability: 0
 });
 ```
+
+## FSRS-lite 调度规则
+
+本项目的复习算法不采用固定间隔，也不优先采用旧 Anki SM-2。第一版改为 FSRS-lite：
+
+- 参考 FSRS/Anki 的公开思路：用每张卡自己的记忆状态计算下次复习。
+- 保留本项目的简单交互：`不认识`、`困难`、`认识`、`掌握`。
+- 不训练个性化参数；先用稳定默认参数，后续再根据用户复习历史优化。
+
+记忆状态字段：
+
+- `difficulty`: 难度，范围 1-10，越大越难记。
+- `stability`: 稳定度，单位为天，表示记忆衰减到目标保持率附近所需时间。
+- `retrievability`: 当前可回忆概率，范围 0-1。
+- `lapseCount`: 忘记次数，用于错词优先和后续分析。
+
+可回忆概率：
+
+```ts
+R = (1 + factor * elapsedDays / stability) ^ decay
+```
+
+其中 `decay = -0.5`，`factor` 取使 `elapsedDays = stability` 时 `R ~= 0.9` 的值。这样 `stability` 可以理解为“约 90% 记得住的间隔”。
+
+按钮映射：
+
+| UI | FSRS-lite rating | 行为 |
+|----|------------------|------|
+| 不认识 | Again | 难度上升、稳定度下降、保持/回到新词、今天仍到期 |
+| 困难 | Hard | 记住但吃力，难度上升，短间隔后复习 |
+| 认识 | Good | 稳定度上升、新词进入认识状态、继续参与复习 |
+| 掌握 | Easy | 稳定度明显上升，状态设为掌握 |
+
+下次复习：
+
+- `不认识`: `dueAt = now`，同一轮内不重复卡住用户，下一次进入今日复习时优先出现。
+- `困难`: `dueAt = now + round(stability) 天`，但稳定度增长较小。
+- `认识`: `dueAt = now + round(stability) 天`。
+- `掌握`: `dueAt = now + round(stability) 天`，但默认不进入今日复习列表。
+
+复习日志：
+
+- 每次点击复习按钮后，向 `reviewLog` 追加一条记录。
+- 日志保留评分、复习时间、上次间隔、计划间隔、复习前后的 D/S/R 关键状态。
+- 后续要做完整 FSRS 参数优化时，直接使用这些日志作为训练数据。
+
+这个设计比固定 `1/3/14` 天更稳健：同样点击“认识”，旧词会根据稳定度延长间隔，错词会因为稳定度低和 `wrongCount` 高而更早、更优先出现。
 
 ## 熟悉度规则
 
@@ -85,33 +159,27 @@ const defaultReviewStats = (timestamp: number) => ({
 
 状态更新：
 
-- 用户点“认识”：`new -> known`，`known -> mastered`，`mastered` 保持。
+- 用户点“认识”：`new -> known`，`known` 保持并拉长复习间隔。
+- 用户点“掌握”：状态设为 `mastered`。
 - 用户点“不认识”：状态降到 `new`。
 - 用户可以在生词本里手动切换状态。
-
-复习间隔采用轻量规则：
-
-```ts
-const nextDueDelayDays = {
-  new: 1,
-  known: 3,
-  mastered: 14
-};
-```
 
 回答正确后：
 
 - `reviewCount + 1`
 - `correctCount + 1`
 - `lastReviewedAt = now`
-- 根据新熟悉度设置 `dueAt`
+- 更新 `difficulty/stability/retrievability`
+- 根据稳定度设置 `dueAt`
 
 回答错误后：
 
 - `reviewCount + 1`
 - `wrongCount + 1`
+- `lapseCount + 1`
 - `lastReviewedAt = now`
 - `familiarity = 'new'`
+- 更新 `difficulty/stability/retrievability`
 - `dueAt = now`
 
 ## 今日复习
@@ -141,7 +209,7 @@ const isDueToday = (entry: WordEntry, now = Date.now()) => {
 
 - 卡片正面：单词、读音/IPA。
 - 点击“显示释义”后显示中文/俄文释义。
-- 底部两个操作：`不认识`、`认识`。
+- 底部四个操作：`不认识`、`困难`、`认识`、`掌握`。
 - 复习完显示空状态：今日已完成。
 
 ## 错词优先

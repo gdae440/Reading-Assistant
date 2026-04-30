@@ -1,19 +1,66 @@
 import React, { useState, useMemo } from 'react';
-import { WordEntry, HistoryEntry } from '../types';
+import { WordEntry, HistoryEntry, VocabFamiliarity, VocabReviewRating } from '../types';
+import {
+  applyReviewResult,
+  familiarityBadgeClass,
+  familiarityLabel,
+  getReviewQueue,
+  isActiveWrongWord,
+  isDueToday,
+  normalizeFamiliarity,
+  normalizeReviewStats,
+  normalizeVocabEntry,
+  setFamiliarity
+} from '../utils/vocabReview';
 
 interface Props {
   vocab: WordEntry[];
   history: HistoryEntry[];
   onRemove: (ids: string[]) => void;
+  onUpdate: (id: string, updates: Partial<WordEntry>) => void;
 }
 
 type LangCategory = 'Japanese' | 'Russian' | 'Chinese' | 'English/Other';
+type VocabFilter = 'all' | 'due' | 'wrong' | 'mastered';
 
-export const VocabularyView: React.FC<Props> = ({ vocab, history, onRemove }) => {
+export const VocabularyView: React.FC<Props> = ({ vocab, history, onRemove, onUpdate }) => {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showGuide, setShowGuide] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(null);
+  const [isReviewing, setIsReviewing] = useState(false);
+  const [showReviewAnswer, setShowReviewAnswer] = useState(false);
+  const [reviewedSessionIds, setReviewedSessionIds] = useState<Set<string>>(new Set());
+  const [activeFilter, setActiveFilter] = useState<VocabFilter>('all');
+
+  const normalizedVocab = useMemo(() => vocab.map(normalizeVocabEntry), [vocab]);
+  const reviewQueue = useMemo(() => getReviewQueue(vocab), [vocab]);
+  const activeReviewQueue = useMemo(
+    () => reviewQueue.filter(entry => !reviewedSessionIds.has(entry.id)),
+    [reviewQueue, reviewedSessionIds]
+  );
+  const currentReviewEntry = activeReviewQueue[0];
+
+  const reviewSummary = useMemo(() => {
+    return normalizedVocab.reduce(
+      (summary, entry) => {
+        const familiarity = normalizeFamiliarity(entry);
+        const stats = normalizeReviewStats(entry);
+        if (familiarity === 'mastered') summary.mastered += 1;
+        if (isActiveWrongWord(entry)) summary.wrong += 1;
+        summary.reviewed += stats.reviewCount > 0 ? 1 : 0;
+        return summary;
+      },
+      { mastered: 0, wrong: 0, reviewed: 0 }
+    );
+  }, [normalizedVocab]);
+
+  const visibleVocab = useMemo(() => {
+    if (activeFilter === 'due') return normalizedVocab.filter(entry => isDueToday(entry));
+    if (activeFilter === 'wrong') return normalizedVocab.filter(isActiveWrongWord);
+    if (activeFilter === 'mastered') return normalizedVocab.filter(entry => normalizeFamiliarity(entry) === 'mastered');
+    return normalizedVocab;
+  }, [activeFilter, normalizedVocab]);
 
   // Group vocabulary by language
   const groupedVocab = useMemo(() => {
@@ -24,7 +71,7 @@ export const VocabularyView: React.FC<Props> = ({ vocab, history, onRemove }) =>
         'English/Other': []
     };
 
-    vocab.forEach(word => {
+    visibleVocab.forEach(word => {
         if (/[\u3040-\u30ff\u3400-\u4dbf]/.test(word.word)) {
             groups['Japanese'].push(word);
         } else if (/[а-яА-ЯЁё]/.test(word.word)) {
@@ -36,7 +83,7 @@ export const VocabularyView: React.FC<Props> = ({ vocab, history, onRemove }) =>
         }
     });
     return groups;
-  }, [vocab]);
+  }, [visibleVocab]);
 
   const toggleSelection = (id: string) => {
     const newSet = new Set(selectedIds);
@@ -46,10 +93,10 @@ export const VocabularyView: React.FC<Props> = ({ vocab, history, onRemove }) =>
   };
 
   const toggleAll = () => {
-    if (selectedIds.size === vocab.length) {
+    if (selectedIds.size === visibleVocab.length) {
       setSelectedIds(new Set());
     } else {
-      setSelectedIds(new Set(vocab.map(v => v.id)));
+      setSelectedIds(new Set(visibleVocab.map(v => v.id)));
     }
   };
 
@@ -61,6 +108,60 @@ export const VocabularyView: React.FC<Props> = ({ vocab, history, onRemove }) =>
         setSelectedIds(new Set());
     }
   };
+
+  const handleReviewResult = (rating: VocabReviewRating) => {
+    if (!currentReviewEntry) return;
+    const nextEntry = applyReviewResult(currentReviewEntry, rating);
+    onUpdate(currentReviewEntry.id, {
+      familiarity: nextEntry.familiarity,
+      reviewStats: nextEntry.reviewStats,
+      reviewLog: nextEntry.reviewLog
+    });
+    setReviewedSessionIds(prev => {
+      const next = new Set(prev);
+      next.add(currentReviewEntry.id);
+      return next;
+    });
+    setShowReviewAnswer(false);
+  };
+
+  const handleFamiliarityChange = (entry: WordEntry, familiarity: VocabFamiliarity) => {
+    const nextEntry = setFamiliarity(entry, familiarity);
+    onUpdate(entry.id, {
+      familiarity: nextEntry.familiarity,
+      reviewStats: nextEntry.reviewStats
+    });
+  };
+
+  const renderFamiliarityBadge = (entry: WordEntry) => {
+    const familiarity = normalizeFamiliarity(entry);
+    return (
+      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${familiarityBadgeClass[familiarity]}`}>
+        {familiarityLabel[familiarity]}
+      </span>
+    );
+  };
+
+  const renderWrongBadge = (entry: WordEntry) => {
+    const stats = normalizeReviewStats(entry);
+    if (!isActiveWrongWord(entry)) return null;
+    return (
+      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-rose-50 text-rose-700 dark:bg-rose-900/20 dark:text-rose-300">
+        错 {stats.wrongCount}
+      </span>
+    );
+  };
+
+  const handleMasteredReview = () => {
+    handleReviewResult('easy');
+  };
+
+  const filterOptions: Array<{ key: VocabFilter; label: string; count: number }> = [
+    { key: 'all', label: '全部', count: normalizedVocab.length },
+    { key: 'due', label: '今日', count: reviewQueue.length },
+    { key: 'wrong', label: '错词', count: reviewSummary.wrong },
+    { key: 'mastered', label: '掌握', count: reviewSummary.mastered }
+  ];
 
   const handleExportAnki = () => {
     const selectedEntries = vocab.filter(v => selectedIds.has(v.id));
@@ -169,6 +270,8 @@ export const VocabularyView: React.FC<Props> = ({ vocab, history, onRemove }) =>
                                 <div className="flex-1 min-w-0 space-y-2">
                                     <div className="flex items-center gap-2">
                                         <span className="font-bold text-gray-900 dark:text-white text-lg truncate">{entry.word}</span>
+                                        {renderFamiliarityBadge(entry)}
+                                        {renderWrongBadge(entry)}
                                         {/* Show Reading or IPA */}
                                         {(entry.ipa || entry.reading) && (
                                             <span className="text-xs text-gray-500 dark:text-gray-400 font-mono bg-gray-100 dark:bg-gray-800 px-1.5 rounded">
@@ -184,6 +287,21 @@ export const VocabularyView: React.FC<Props> = ({ vocab, history, onRemove }) =>
                                         <span className="text-gray-400 dark:text-gray-600 text-xs mr-1">俄</span>{entry.meaningRu}
                                     </div>
                                     )}
+                                    <div className="flex items-center gap-1 pt-1">
+                                        {(['new', 'known', 'mastered'] as VocabFamiliarity[]).map((level) => (
+                                            <button
+                                                key={level}
+                                                onClick={() => handleFamiliarityChange(entry, level)}
+                                                className={`px-2 py-1 rounded-lg text-[11px] font-medium transition-colors ${
+                                                    normalizeFamiliarity(entry) === level
+                                                        ? 'bg-gray-900 text-white dark:bg-white dark:text-black'
+                                                        : 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400'
+                                                }`}
+                                            >
+                                                {familiarityLabel[level]}
+                                            </button>
+                                        ))}
+                                    </div>
                                 </div>
                             </div>
                         ))}
@@ -204,11 +322,30 @@ export const VocabularyView: React.FC<Props> = ({ vocab, history, onRemove }) =>
                                     </td>
                                     <td className="p-4 w-1/4 align-top">
                                         <div className="font-semibold text-gray-900 dark:text-white text-lg">{entry.word}</div>
+                                        <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                                            {renderFamiliarityBadge(entry)}
+                                            {renderWrongBadge(entry)}
+                                        </div>
                                         {(entry.ipa || entry.reading) && (
                                             <div className="text-xs text-gray-500 dark:text-gray-400 font-mono mt-0.5 bg-gray-100 dark:bg-gray-800 inline-block px-1.5 rounded">
                                                 {entry.reading || entry.ipa}
                                             </div>
                                         )}
+                                        <div className="flex items-center gap-1 mt-2">
+                                            {(['new', 'known', 'mastered'] as VocabFamiliarity[]).map((level) => (
+                                                <button
+                                                    key={level}
+                                                    onClick={() => handleFamiliarityChange(entry, level)}
+                                                    className={`px-2 py-1 rounded-lg text-[11px] font-medium transition-colors ${
+                                                        normalizeFamiliarity(entry) === level
+                                                            ? 'bg-gray-900 text-white dark:bg-white dark:text-black'
+                                                            : 'bg-gray-100 text-gray-500 hover:text-gray-800 dark:bg-gray-800 dark:text-gray-400 dark:hover:text-gray-100'
+                                                    }`}
+                                                >
+                                                    {familiarityLabel[level]}
+                                                </button>
+                                            ))}
+                                        </div>
                                     </td>
                                     <td className="p-4 w-1/4 align-top text-gray-700 dark:text-gray-300 leading-relaxed">{entry.meaningCn}</td>
                                     <td className="p-4 w-1/4 align-top text-gray-700 dark:text-gray-300 leading-relaxed">{entry.meaningRu}</td>
@@ -272,19 +409,177 @@ export const VocabularyView: React.FC<Props> = ({ vocab, history, onRemove }) =>
             </div>
         </div>
 
+        {vocab.length > 0 && (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-4">
+                <div className="bg-white dark:bg-[#1c1c1e] border border-gray-100 dark:border-white/10 rounded-2xl px-4 py-3">
+                    <div className="text-xs text-gray-500 dark:text-gray-400">今日待复习</div>
+                    <div className="text-2xl font-bold text-gray-900 dark:text-white">{reviewQueue.length}</div>
+                </div>
+                <div className="bg-white dark:bg-[#1c1c1e] border border-gray-100 dark:border-white/10 rounded-2xl px-4 py-3">
+                    <div className="text-xs text-gray-500 dark:text-gray-400">错词</div>
+                    <div className="text-2xl font-bold text-rose-600 dark:text-rose-300">{reviewSummary.wrong}</div>
+                </div>
+                <div className="bg-white dark:bg-[#1c1c1e] border border-gray-100 dark:border-white/10 rounded-2xl px-4 py-3">
+                    <div className="text-xs text-gray-500 dark:text-gray-400">已复习</div>
+                    <div className="text-2xl font-bold text-gray-900 dark:text-white">{reviewSummary.reviewed}</div>
+                </div>
+                <div className="bg-white dark:bg-[#1c1c1e] border border-gray-100 dark:border-white/10 rounded-2xl px-4 py-3">
+                    <div className="text-xs text-gray-500 dark:text-gray-400">已掌握</div>
+                    <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-300">{reviewSummary.mastered}</div>
+                </div>
+            </div>
+        )}
+
+        {vocab.length > 0 && (
+            <div className="mb-5 bg-white dark:bg-[#1c1c1e] border border-gray-100 dark:border-white/10 rounded-3xl overflow-hidden">
+                {!isReviewing ? (
+                    <div className="p-4 md:p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                        <div>
+                            <div className="text-base font-bold text-gray-900 dark:text-white">今日复习</div>
+                            <div className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                                {reviewQueue.length > 0 ? `有 ${reviewQueue.length} 个词需要复习，错词会优先出现。` : '今天没有到期的生词。'}
+                            </div>
+                        </div>
+                        <button
+                            onClick={() => {
+                                setIsReviewing(true);
+                                setShowReviewAnswer(false);
+                                setReviewedSessionIds(new Set());
+                            }}
+                            disabled={reviewQueue.length === 0}
+                            className="px-4 py-2 rounded-xl bg-black text-white dark:bg-white dark:text-black text-sm font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                            开始今日复习
+                        </button>
+                    </div>
+                ) : currentReviewEntry ? (
+                    <div className="p-5 md:p-6">
+                        <div className="flex items-center justify-between gap-3 mb-5">
+                            <div className="flex items-center gap-2">
+                                <span className="text-xs text-gray-500 dark:text-gray-400">剩余 {activeReviewQueue.length}</span>
+                                {renderFamiliarityBadge(currentReviewEntry)}
+                                {renderWrongBadge(currentReviewEntry)}
+                            </div>
+                            <button
+                                onClick={() => {
+                                    setIsReviewing(false);
+                                    setShowReviewAnswer(false);
+                                }}
+                                className="text-xs px-3 py-1.5 rounded-lg bg-gray-100 text-gray-600 hover:text-gray-900 dark:bg-gray-800 dark:text-gray-300 dark:hover:text-white"
+                            >
+                                退出
+                            </button>
+                        </div>
+
+                        <div className="text-center py-4">
+                            <div className="text-3xl md:text-4xl font-bold text-gray-950 dark:text-white break-words">{currentReviewEntry.word}</div>
+                            {(currentReviewEntry.reading || currentReviewEntry.ipa) && (
+                                <div className="mt-2 text-sm font-mono text-gray-500 dark:text-gray-400">
+                                    {currentReviewEntry.reading || currentReviewEntry.ipa}
+                                </div>
+                            )}
+                        </div>
+
+                        {showReviewAnswer ? (
+                            <div className="mt-4 space-y-2 text-sm">
+                                <div className="bg-gray-50 dark:bg-white/5 rounded-2xl p-4 text-gray-800 dark:text-gray-200">
+                                    <span className="text-gray-400 dark:text-gray-500 mr-2">中</span>{currentReviewEntry.meaningCn}
+                                </div>
+                                {currentReviewEntry.meaningRu && (
+                                    <div className="bg-gray-50 dark:bg-white/5 rounded-2xl p-4 text-gray-800 dark:text-gray-200">
+                                        <span className="text-gray-400 dark:text-gray-500 mr-2">俄</span>{currentReviewEntry.meaningRu}
+                                    </div>
+                                )}
+                            </div>
+                        ) : (
+                            <button
+                                onClick={() => setShowReviewAnswer(true)}
+                                className="w-full mt-4 py-3 rounded-2xl bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-200 font-semibold"
+                            >
+                                显示释义
+                            </button>
+                        )}
+
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-5">
+                            <button
+                                onClick={() => handleReviewResult('again')}
+                                className="py-3 rounded-2xl bg-rose-50 text-rose-700 dark:bg-rose-900/20 dark:text-rose-200 font-bold"
+                            >
+                                不认识
+                            </button>
+                            <button
+                                onClick={() => handleReviewResult('hard')}
+                                className="py-3 rounded-2xl bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-200 font-bold"
+                            >
+                                困难
+                            </button>
+                            <button
+                                onClick={() => handleReviewResult('good')}
+                                className="py-3 rounded-2xl bg-emerald-600 text-white dark:bg-emerald-500 dark:text-black font-bold"
+                            >
+                                认识
+                            </button>
+                            <button
+                                onClick={handleMasteredReview}
+                                className="py-3 rounded-2xl bg-gray-900 text-white dark:bg-white dark:text-black font-bold"
+                            >
+                                掌握
+                            </button>
+                        </div>
+                    </div>
+                ) : (
+                    <div className="p-5 flex items-center justify-between gap-3">
+                        <div>
+                            <div className="text-base font-bold text-gray-900 dark:text-white">今日已完成</div>
+                            <div className="text-sm text-gray-500 dark:text-gray-400 mt-1">当前没有到期词，掌握词不会进入今日复习。</div>
+                        </div>
+                        <button
+                            onClick={() => {
+                                setIsReviewing(false);
+                                setShowReviewAnswer(false);
+                            }}
+                            className="px-4 py-2 rounded-xl bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-200 text-sm font-semibold"
+                        >
+                            返回
+                        </button>
+                    </div>
+                )}
+            </div>
+        )}
+
         {/* Action Bar / Select All Row */}
         {vocab.length > 0 && (
-             <div className="flex items-center gap-2 mb-4 px-1">
-                 <input 
-                     type="checkbox" 
-                     id="selectAll"
-                     onChange={toggleAll}
-                     checked={selectedIds.size === vocab.length}
-                     className="rounded-md border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500 w-4 h-4 cursor-pointer" 
-                 />
-                 <label htmlFor="selectAll" className="text-sm text-gray-600 dark:text-gray-400 cursor-pointer select-none">
-                     全选所有单词
-                 </label>
+             <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-4 px-1">
+                 <div className="flex items-center gap-2">
+                     <input 
+                         type="checkbox" 
+                         id="selectAll"
+                         onChange={toggleAll}
+                         checked={visibleVocab.length > 0 && selectedIds.size === visibleVocab.length}
+                         className="rounded-md border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500 w-4 h-4 cursor-pointer" 
+                     />
+                     <label htmlFor="selectAll" className="text-sm text-gray-600 dark:text-gray-400 cursor-pointer select-none">
+                         全选当前列表
+                     </label>
+                 </div>
+                 <div className="flex items-center gap-1 bg-gray-100 dark:bg-gray-800 rounded-xl p-1 overflow-x-auto">
+                     {filterOptions.map(option => (
+                         <button
+                             key={option.key}
+                             onClick={() => {
+                                 setActiveFilter(option.key);
+                                 setSelectedIds(new Set());
+                             }}
+                             className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
+                                 activeFilter === option.key
+                                     ? 'bg-white dark:bg-gray-600 text-gray-900 dark:text-white shadow-sm'
+                                     : 'text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200'
+                             }`}
+                         >
+                             {option.label} {option.count}
+                         </button>
+                     ))}
+                 </div>
              </div>
         )}
 
@@ -293,6 +588,11 @@ export const VocabularyView: React.FC<Props> = ({ vocab, history, onRemove }) =>
                 <div className="flex flex-col items-center justify-center h-64 text-gray-400 dark:text-gray-600">
                     <svg className="w-12 h-12 mb-3 text-gray-300 dark:text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"></path></svg>
                     <p>暂无生词</p>
+                </div>
+            ) : visibleVocab.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-64 text-gray-400 dark:text-gray-600">
+                    <svg className="w-12 h-12 mb-3 text-gray-300 dark:text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414A1 1 0 0014 14.414V19a1 1 0 01-.553.894l-2 1A1 1 0 0110 20v-5.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"></path></svg>
+                    <p>当前筛选没有生词</p>
                 </div>
             ) : (
                 <>

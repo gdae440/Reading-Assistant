@@ -118,6 +118,7 @@ function App() {
       case Tab.READER:
         return (
             <ReaderView 
+                vocab={vocab}
                 settings={settings} 
                 onAddToVocab={handleAddToVocab} 
                 onUpdateVocabEntry={handleUpdateVocabEntry}
@@ -126,7 +127,14 @@ function App() {
             />
         );
       case Tab.VOCABULARY:
-        return <VocabularyView vocab={vocab} history={history} onRemove={handleRemoveFromVocab} />;
+        return (
+            <VocabularyView
+                vocab={vocab}
+                history={history}
+                onRemove={handleRemoveFromVocab}
+                onUpdate={handleUpdateVocabEntry}
+            />
+        );
       case Tab.SETTINGS:
         return <SettingsView settings={settings} onSave={handleSettingsChange} onClearKeys={handleClearKeys} />;
       default:
