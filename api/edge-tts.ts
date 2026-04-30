@@ -6,6 +6,9 @@ type VercelRequest = IncomingMessage & {
 };
 
 const EDGE_TTS_TEXT_LIMIT = 5000;
+const EDGE_TTS_BODY_LIMIT_BYTES = 64 * 1024;
+const EDGE_TTS_RATE_LIMIT_WINDOW_MS = 60 * 1000;
+const EDGE_TTS_RATE_LIMIT_MAX_REQUESTS = 20;
 const DEFAULT_EDGE_VOICE = 'en-US-AvaMultilingualNeural';
 const DEFAULT_EDGE_TTS_SYNTHESIS_TIMEOUT_MS = 12000;
 
@@ -28,11 +31,42 @@ class EdgeTTSTimeoutError extends Error {
   }
 }
 
+class EdgeTTSBodyTooLargeError extends Error {
+  constructor() {
+    super(`Edge TTS 请求体不能超过 ${Math.round(EDGE_TTS_BODY_LIMIT_BYTES / 1024)}KB`);
+    this.name = 'EdgeTTSBodyTooLargeError';
+  }
+}
+
+class EdgeTTSForbiddenError extends Error {
+  constructor() {
+    super('Edge TTS 请求来源无效');
+    this.name = 'EdgeTTSForbiddenError';
+  }
+}
+
+class EdgeTTSRateLimitError extends Error {
+  retryAfterSeconds: number;
+
+  constructor(retryAfterSeconds: number) {
+    super('Edge TTS 请求过于频繁，请稍后再试');
+    this.name = 'EdgeTTSRateLimitError';
+    this.retryAfterSeconds = retryAfterSeconds;
+  }
+}
+
 interface EdgeTTSRequest {
   text?: unknown;
   voice?: unknown;
   speed?: unknown;
 }
+
+interface RateLimitEntry {
+  count: number;
+  resetAt: number;
+}
+
+const rateLimitStore = new Map<string, RateLimitEntry>();
 
 const writeJson = (res: ServerResponse, status: number, body: unknown, extraHeaders: Record<string, string> = {}) => {
   res.statusCode = status;
@@ -43,9 +77,20 @@ const writeJson = (res: ServerResponse, status: number, body: unknown, extraHead
 };
 
 const readRawBody = async (req: IncomingMessage): Promise<string> => {
+  const contentLength = Number(req.headers['content-length']);
+  if (Number.isFinite(contentLength) && contentLength > EDGE_TTS_BODY_LIMIT_BYTES) {
+    throw new EdgeTTSBodyTooLargeError();
+  }
+
   const chunks: Buffer[] = [];
+  let totalBytes = 0;
   for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    totalBytes += buffer.byteLength;
+    if (totalBytes > EDGE_TTS_BODY_LIMIT_BYTES) {
+      throw new EdgeTTSBodyTooLargeError();
+    }
+    chunks.push(buffer);
   }
   return Buffer.concat(chunks).toString('utf8');
 };
@@ -56,6 +101,15 @@ const parseJson = (raw: string): unknown => {
 
 const readPayload = async (req: VercelRequest): Promise<unknown> => {
   if (req.body !== undefined) {
+    const serializedBody =
+      Buffer.isBuffer(req.body) || typeof req.body === 'string'
+        ? req.body
+        : JSON.stringify(req.body) ?? '';
+    const bodySize = Buffer.byteLength(serializedBody);
+    if (bodySize > EDGE_TTS_BODY_LIMIT_BYTES) {
+      throw new EdgeTTSBodyTooLargeError();
+    }
+
     if (Buffer.isBuffer(req.body)) return parseJson(req.body.toString('utf8'));
     if (typeof req.body === 'string') return parseJson(req.body);
     return req.body;
@@ -100,6 +154,78 @@ const normalizeText = (text: unknown): string => {
   return value;
 };
 
+const headerValue = (value: string | string[] | undefined): string => {
+  if (Array.isArray(value)) return value[0] || '';
+  return value || '';
+};
+
+const requestHost = (req: IncomingMessage): string => {
+  const forwardedHost = headerValue(req.headers['x-forwarded-host']);
+  return forwardedHost || headerValue(req.headers.host);
+};
+
+const configuredAllowedOrigins = (): string[] => {
+  return (process.env.EDGE_TTS_ALLOWED_ORIGINS || '')
+    .split(',')
+    .map(origin => origin.trim())
+    .filter(Boolean);
+};
+
+const assertAllowedOrigin = (req: IncomingMessage) => {
+  const origin = headerValue(req.headers.origin);
+
+  if (!origin) {
+    const fetchSite = headerValue(req.headers['sec-fetch-site']);
+    if (fetchSite === 'same-origin' || fetchSite === 'same-site') return;
+
+    if (process.env.VERCEL || process.env.NODE_ENV === 'production') {
+      throw new EdgeTTSForbiddenError();
+    }
+    return;
+  }
+
+  const allowedOrigins = configuredAllowedOrigins();
+  if (allowedOrigins.includes(origin)) return;
+
+  try {
+    const originUrl = new URL(origin);
+    if (originUrl.host === requestHost(req)) return;
+  } catch {
+    throw new EdgeTTSForbiddenError();
+  }
+
+  throw new EdgeTTSForbiddenError();
+};
+
+const clientIp = (req: IncomingMessage): string => {
+  const forwardedFor = headerValue(req.headers['x-forwarded-for']);
+  return forwardedFor.split(',')[0]?.trim() || req.socket.remoteAddress || 'unknown';
+};
+
+const assertRateLimit = (req: IncomingMessage) => {
+  const now = Date.now();
+  const key = clientIp(req);
+  const current = rateLimitStore.get(key);
+
+  if (!current || current.resetAt <= now) {
+    rateLimitStore.set(key, {
+      count: 1,
+      resetAt: now + EDGE_TTS_RATE_LIMIT_WINDOW_MS
+    });
+    return;
+  }
+
+  if (current.count >= EDGE_TTS_RATE_LIMIT_MAX_REQUESTS) {
+    throw new EdgeTTSRateLimitError(Math.ceil((current.resetAt - now) / 1000));
+  }
+
+  current.count += 1;
+
+  for (const [storeKey, entry] of rateLimitStore) {
+    if (entry.resetAt <= now) rateLimitStore.delete(storeKey);
+  }
+};
+
 const synthesizeEdgeSpeech = async (payload: EdgeTTSRequest): Promise<Buffer> => {
   const timeoutMs = getEdgeTTSTimeoutMs();
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -141,6 +267,9 @@ const synthesizeEdgeSpeechUnsafe = async (payload: EdgeTTSRequest): Promise<Buff
 
 const getErrorStatus = (error: unknown): number => {
   if (error instanceof SyntaxError || error instanceof EdgeTTSInputError) return 400;
+  if (error instanceof EdgeTTSBodyTooLargeError) return 413;
+  if (error instanceof EdgeTTSForbiddenError) return 403;
+  if (error instanceof EdgeTTSRateLimitError) return 429;
   if (error instanceof EdgeTTSTimeoutError) return 504;
   return 502;
 };
@@ -169,6 +298,8 @@ export default async function handler(req: VercelRequest, res: ServerResponse): 
   }
 
   try {
+    assertAllowedOrigin(req);
+    assertRateLimit(req);
     const payload = await readPayload(req);
     const audio = await synthesizeEdgeSpeech(payload && typeof payload === 'object' ? payload : {});
 
@@ -179,6 +310,10 @@ export default async function handler(req: VercelRequest, res: ServerResponse): 
   } catch (error) {
     const status = getErrorStatus(error);
     logSynthesisError(error, status);
-    writeJson(res, status, errorBody(error));
+    const headers =
+      error instanceof EdgeTTSRateLimitError
+        ? { 'Retry-After': String(error.retryAfterSeconds) }
+        : {};
+    writeJson(res, status, errorBody(error), headers);
   }
 }

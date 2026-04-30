@@ -619,7 +619,16 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
      }
      
      // API TTS
-     const cacheKey = `${text}_${settings.ttsProvider}_${settings.sfTtsVoice}_${settings.azureVoice}_${settings.edgeVoice}_${settings.ttsSpeed}`;
+     const cacheKey = JSON.stringify({
+        text,
+        provider: settings.ttsProvider,
+        sfModel: settings.sfTtsModel,
+        sfVoice: settings.sfTtsVoice,
+        azureRegion: settings.azureRegion,
+        azureVoice: settings.azureVoice,
+        edgeVoice: settings.edgeVoice,
+        speed: settings.ttsSpeed
+     });
      let url = getAudioFromCache(cacheKey);
 
      if (!url) {
@@ -846,8 +855,14 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
       
       let csvContent = "";
       
+      const preventCsvFormula = (value: string) => {
+          const trimmedStart = value.trimStart();
+          if (/^[=+\-@]/.test(trimmedStart)) return `'${value}`;
+          return value;
+      };
+
       const addToCsv = (front: string, back: string, tag: string) => {
-          const escape = (s: string) => `"${s.replace(/"/g, '""')}"`;
+          const escape = (s: string) => `"${preventCsvFormula(s).replace(/"/g, '""')}"`;
           csvContent += `${escape(front)},${escape(back)},${escape(tag)}\n`;
       };
 
@@ -863,6 +878,7 @@ export const ReaderView: React.FC<Props> = ({ settings, onAddToVocab, onUpdateVo
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
+      URL.revokeObjectURL(url);
   };
 
   const addAnalysisItemToVocab = (item: {text: string, cn: string}) => {

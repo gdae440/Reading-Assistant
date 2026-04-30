@@ -1,6 +1,7 @@
 import { Buffer } from 'node:buffer';
 
 export const EDGE_TTS_TEXT_LIMIT = 5000;
+export const EDGE_TTS_BODY_LIMIT_BYTES = 64 * 1024;
 export const DEFAULT_EDGE_VOICE = 'en-US-AvaMultilingualNeural';
 const DEFAULT_EDGE_TTS_SYNTHESIS_TIMEOUT_MS = 12000;
 

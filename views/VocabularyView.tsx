@@ -129,6 +129,7 @@ export const VocabularyView: React.FC<Props> = ({ vocab, history, onRemove }) =>
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
     
     setShowGuide(true);
   };
