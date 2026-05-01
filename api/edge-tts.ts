@@ -10,7 +10,7 @@ const EDGE_TTS_BODY_LIMIT_BYTES = 64 * 1024;
 const EDGE_TTS_RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const EDGE_TTS_RATE_LIMIT_MAX_REQUESTS = 20;
 const DEFAULT_EDGE_VOICE = 'en-US-AvaMultilingualNeural';
-const DEFAULT_EDGE_TTS_SYNTHESIS_TIMEOUT_MS = 12000;
+const DEFAULT_EDGE_TTS_SYNTHESIS_TIMEOUT_MS = 25000;
 
 const jsonHeaders = {
   'Cache-Control': 'no-store',
@@ -121,7 +121,7 @@ const readPayload = async (req: VercelRequest): Promise<unknown> => {
 const getEdgeTTSTimeoutMs = (): number => {
   const configured = Number(process.env.EDGE_TTS_TIMEOUT_MS);
   if (!Number.isFinite(configured) || configured <= 0) return DEFAULT_EDGE_TTS_SYNTHESIS_TIMEOUT_MS;
-  return Math.min(25000, Math.max(3000, configured));
+  return Math.min(45000, Math.max(5000, configured));
 };
 
 const normalizeSpeed = (speed: unknown): number => {
@@ -248,7 +248,7 @@ const synthesizeEdgeSpeechUnsafe = async (payload: EdgeTTSRequest): Promise<Buff
   const communicate = new Communicate(text, {
     voice,
     rate: toRate(speed),
-    connectionTimeout: Math.min(8000, getEdgeTTSTimeoutMs())
+    connectionTimeout: Math.min(15000, getEdgeTTSTimeoutMs())
   });
 
   const buffers: Buffer[] = [];

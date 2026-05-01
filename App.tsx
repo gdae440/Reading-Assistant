@@ -5,6 +5,16 @@ import { useLocalStorage } from './hooks/useLocalStorage';
 import { ReaderView } from './views/ReaderView';
 import { VocabularyView } from './views/VocabularyView';
 import { SettingsView } from './views/SettingsView';
+import {
+  migrateLegacyAzureVoice,
+  migrateLegacyTTSProvider,
+  splitSettingsSecrets
+} from './utils/settingsMigration';
+import {
+  createBackup,
+  parseBackupJson,
+  stringifyBackup
+} from './utils/backupData';
 
 const DEFAULT_SETTINGS: AppSettings = {
   apiKey: '',
@@ -37,6 +47,27 @@ const DEFAULT_SECRET_KEYS = {
   azureKey: ''
 };
 
+const READER_TEXT_STORAGE_KEY = 'reader_text';
+
+const readStoredReaderText = () => {
+  if (typeof window === 'undefined') return '';
+
+  const raw = window.localStorage.getItem(READER_TEXT_STORAGE_KEY);
+  if (!raw) return '';
+
+  try {
+    const parsed = JSON.parse(raw);
+    return typeof parsed === 'string' ? parsed : '';
+  } catch {
+    return raw;
+  }
+};
+
+const writeStoredJson = (key: string, value: unknown) => {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(key, JSON.stringify(value));
+};
+
 function App() {
   const [activeTab, setActiveTab] = useState<Tab>(Tab.READER);
   const [storedSettings, setStoredSettings] = useLocalStorage<AppSettings>('polyglot_settings', DEFAULT_SETTINGS);
@@ -61,23 +92,23 @@ function App() {
   useEffect(() => {
     if (!storedSettings.apiKey && !storedSettings.azureKey) return;
 
-    setSecretKeys(prev => ({
-      apiKey: prev.apiKey || storedSettings.apiKey,
-      azureKey: prev.azureKey || storedSettings.azureKey
-    }));
-    setStoredSettings(prev => ({ ...prev, apiKey: '', azureKey: '' }));
-  }, [storedSettings.apiKey, storedSettings.azureKey, setSecretKeys, setStoredSettings]);
+    const migrated = splitSettingsSecrets(storedSettings, secretKeys);
+    setSecretKeys(migrated.secretKeys);
+    setStoredSettings(migrated.storedSettings);
+  }, [storedSettings, secretKeys, setSecretKeys, setStoredSettings]);
 
   // Migration Effect: Fix broken voices (e.g., Ollie) for existing users
   useEffect(() => {
-    if (settings.azureVoice === 'en-GB-OllieNeural') {
-        handleSettingsChange(prev => ({ ...prev, azureVoice: 'en-GB-RyanNeural' }));
+    const migratedVoice = migrateLegacyAzureVoice(settings.azureVoice);
+    if (migratedVoice !== settings.azureVoice) {
+        handleSettingsChange(prev => ({ ...prev, azureVoice: migratedVoice }));
     }
   }, [settings.azureVoice]);
 
   useEffect(() => {
-    if ((settings.ttsProvider as string) === 'browser-cloud') {
-      handleSettingsChange(prev => ({ ...prev, ttsProvider: 'edge' }));
+    const migratedProvider = migrateLegacyTTSProvider(settings.ttsProvider as AppSettings['ttsProvider'] | 'browser-cloud');
+    if (migratedProvider !== settings.ttsProvider) {
+      handleSettingsChange(prev => ({ ...prev, ttsProvider: migratedProvider }));
     }
   }, [settings.ttsProvider]);
 
@@ -113,6 +144,52 @@ function App() {
     });
   };
 
+  const handleExportBackup = () => {
+    const backup = createBackup({
+      settings,
+      vocab,
+      history,
+      readerText: readStoredReaderText()
+    });
+    const blob = new Blob([stringifyBackup(backup)], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    const date = new Date().toISOString().slice(0, 10);
+
+    anchor.href = url;
+    anchor.download = `polyglot-backup-${date}.json`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleImportBackup = async (file: File) => {
+    const text = await file.text();
+    const restored = parseBackupJson(text, settings);
+    const nextSettings: AppSettings = {
+      ...restored.settings,
+      apiKey: settings.apiKey,
+      azureKey: settings.azureKey
+    };
+    const { apiKey, azureKey, ...safeSettings } = nextSettings;
+    const nextSecrets = { apiKey, azureKey };
+    const nextStoredSettings = { ...safeSettings, apiKey: '', azureKey: '' };
+    const nextHistory = restored.history.slice(0, 50);
+
+    writeStoredJson('polyglot_settings', nextStoredSettings);
+    writeStoredJson('polyglot_secret_keys', nextSecrets);
+    writeStoredJson('polyglot_vocab', restored.vocab);
+    writeStoredJson('polyglot_history', nextHistory);
+    writeStoredJson(READER_TEXT_STORAGE_KEY, restored.readerText);
+
+    setStoredSettings(nextStoredSettings);
+    setSecretKeys(nextSecrets);
+    setVocab(restored.vocab);
+    setHistory(nextHistory);
+    setActiveTab(Tab.READER);
+  };
+
   const renderContent = () => {
     switch (activeTab) {
       case Tab.READER:
@@ -136,7 +213,15 @@ function App() {
             />
         );
       case Tab.SETTINGS:
-        return <SettingsView settings={settings} onSave={handleSettingsChange} onClearKeys={handleClearKeys} />;
+        return (
+          <SettingsView
+            settings={settings}
+            onSave={handleSettingsChange}
+            onClearKeys={handleClearKeys}
+            onExportBackup={handleExportBackup}
+            onImportBackup={handleImportBackup}
+          />
+        );
       default:
         return null;
     }

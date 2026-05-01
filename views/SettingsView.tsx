@@ -6,11 +6,42 @@ interface Props {
   settings: AppSettings;
   onSave: (settings: AppSettings) => void;
   onClearKeys: () => void;
+  onExportBackup: () => void;
+  onImportBackup: (file: File) => Promise<void>;
 }
 
-export const SettingsView: React.FC<Props> = ({ settings, onSave, onClearKeys }) => {
+export const SettingsView: React.FC<Props> = ({
+  settings,
+  onSave,
+  onClearKeys,
+  onExportBackup,
+  onImportBackup
+}) => {
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const [importError, setImportError] = React.useState('');
+  const [isImporting, setIsImporting] = React.useState(false);
+
   const handleChange = (key: keyof AppSettings, value: any) => {
     onSave({ ...settings, [key]: value });
+  };
+
+  const handleImportFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
+    const confirmed = window.confirm('导入会覆盖当前设置、生词本、历史记录和阅读文本。API Key 会保留当前浏览器里的值。确定导入吗？');
+    if (!confirmed) return;
+
+    setImportError('');
+    setIsImporting(true);
+    try {
+      await onImportBackup(file);
+    } catch (error) {
+      setImportError(error instanceof Error ? error.message : '导入失败，请检查备份文件。');
+    } finally {
+      setIsImporting(false);
+    }
   };
 
   const hasSavedKeys = Boolean(settings.apiKey || settings.azureKey);
@@ -66,6 +97,48 @@ export const SettingsView: React.FC<Props> = ({ settings, onSave, onClearKeys })
             >
               清除本机保存的 Key
             </button>
+          </div>
+        </div>
+
+        {/* Backup Section */}
+        <div className="bg-white dark:bg-[#1c1c1e] rounded-2xl shadow-[0_2px_15px_rgb(0,0,0,0.02)] border border-gray-100 dark:border-white/10 overflow-hidden transition-colors">
+          <div className="px-6 py-4 border-b border-gray-50 dark:border-white/5">
+            <h3 className="text-base font-semibold text-gray-900 dark:text-white">数据备份</h3>
+          </div>
+          <div className="p-6 space-y-4">
+            <p className="text-sm leading-relaxed text-gray-600 dark:text-gray-400">
+              导出 JSON 会包含设置、生词本、复习记录、历史记录和当前阅读文本。API Key 不会写入备份文件。
+            </p>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <button
+                onClick={onExportBackup}
+                className="h-11 px-4 rounded-xl bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 transition-colors"
+              >
+                导出 JSON 备份
+              </button>
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isImporting}
+                className="h-11 px-4 rounded-xl bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-white text-sm font-semibold hover:bg-gray-200 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                {isImporting ? '正在导入...' : '导入 JSON 备份'}
+              </button>
+            </div>
+
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="application/json,.json"
+              onChange={handleImportFile}
+              className="hidden"
+            />
+
+            {importError && (
+              <div className="rounded-xl border border-red-100 dark:border-red-900/30 bg-red-50 dark:bg-red-900/10 p-3 text-xs leading-relaxed text-red-700 dark:text-red-200">
+                {importError}
+              </div>
+            )}
           </div>
         </div>
 
